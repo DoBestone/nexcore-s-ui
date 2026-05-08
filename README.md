@@ -1,213 +1,204 @@
-# S-UI
-**An Advanced Web Panel • Built on SagerNet/Sing-Box**
+# nexcore-s-ui
 
-![](https://img.shields.io/github/v/release/alireza0/s-ui.svg)
-[![Go Report Card](https://goreportcard.com/badge/github.com/alireza0/s-ui)](https://goreportcard.com/report/github.com/alireza0/s-ui)
-[![Downloads](https://img.shields.io/github/downloads/alireza0/s-ui/total.svg)](https://img.shields.io/github/downloads/alireza0/s-ui/total.svg)
+**Sing-Box 高级 Web 控制面板 · NexCore 二次开发版**
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/DoBestone/nexcore-s-ui)](https://goreportcard.com/report/github.com/DoBestone/nexcore-s-ui)
 [![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
-> **Disclaimer:** This project is only for personal learning and communication, please do not use it for illegal purposes, please do not use it in a production environment
+> 基于 [alireza0/s-ui](https://github.com/alireza0/s-ui) v1.4.1 二次开发。前端从 Vuetify 4 全量重写为 Element Plus,严格遵循 [NexCore 统一 UI 设计规范](https://github.com/DoBestone/nexcore-s-ui/blob/main/UI_MIGRATION_PLAN.md);后端基于上游,精简了 Docker 链路与冗余日志容器检测。
 
-**If you think this project is helpful to you, you may wish to give a**:star2:
+> **声明:** 仅供个人学习与技术研究,请勿用于非法用途。
 
-**Want to contribute?** See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding conventions, testing, and the pull request process.
+---
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/alireza7)
+## 与上游 alireza0/s-ui 的差异
 
-<a href="https://nowpayments.io/donation/alireza7" target="_blank" rel="noreferrer noopener">
-   <img src="https://nowpayments.io/images/embeds/donation-button-white.svg" alt="Crypto donation button by NOWPayments">
-</a>
+| 维度 | 上游 | 本仓库 |
+|---|---|---|
+| 前端框架 | Vuetify 4 + Material Design | **Element Plus + NexCore 设计系统** |
+| 字体 | Roboto / 默认 system | Manrope display + system body + JetBrains Mono(`tabular-nums`) |
+| 国际化 | 6 种全量加载 | 6 种(en / fa / vi / zhHans / zhHant / ru),**异步按需加载** |
+| 通知 | Notivue | ElMessage / ElNotification |
+| 时间库 | moment.js | dayjs |
+| Docker | 提供 Dockerfile / compose / CI | **已移除** |
+| 前端集成 | git submodule | **直接合并到本仓库** |
+| 初始 JS / CSS | ~1280 KB / ~370 KB | **213 KB / 28 KB**(gzip ~86 KB) |
+| Modal 加载 | 全量打包 | **按需 lazy import** |
 
-## Quick Overview
-| Features                               |      Enable?       |
-| -------------------------------------- | :----------------: |
-| Multi-Protocol                         | :heavy_check_mark: |
-| Multi-Language                         | :heavy_check_mark: |
-| Multi-Client/Inbound                   | :heavy_check_mark: |
-| Advanced Traffic Routing Interface     | :heavy_check_mark: |
-| Client & Traffic & System Status       | :heavy_check_mark: |
-| Subscription Link (link/json/clash + info)| :heavy_check_mark: |
-| Dark/Light Theme                       | :heavy_check_mark: |
-| API Interface                          | :heavy_check_mark: |
+---
 
-## Supported Platforms
-| Platform | Architecture | Status |
+## 功能速查
+
+| 功能                                    |       状态       |
+| --------------------------------------- | :--------------: |
+| 多协议(VLESS / VMess / Trojan / Hysteria 等)|        ✅        |
+| 多语言(en / fa / vi / 中 / 繁 / ру)    |        ✅        |
+| 多客户端 / 多入站                        |        ✅        |
+| 高级路由规则界面                         |        ✅        |
+| 在线状态、流量、系统监控                  |        ✅        |
+| 订阅链接(原生 / json / clash + 元信息) |        ✅        |
+| 浅色 / 深色主题                          |        ✅        |
+| API 接口                                 |        ✅        |
+
+## 支持平台
+
+| 平台 | 架构 | 状态 |
 |----------|--------------|---------|
-| Linux    | amd64, arm64, armv7, armv6, armv5, 386, s390x | ✅ Supported |
-| Windows  | amd64, 386, arm64 | ✅ Supported |
-| macOS    | amd64, arm64 | 🚧 Experimental |
+| Linux    | amd64, arm64, armv7, armv6, armv5, 386, s390x | ✅ |
+| Windows  | amd64, 386, arm64 | ✅ |
+| macOS    | amd64, arm64 | 🚧 实验性 |
 
-## Screenshots
+## 默认安装信息
 
-!["Main"](https://github.com/alireza0/s-ui-frontend/raw/main/media/main.png)
+- 面板端口:2095
+- 面板路径:`/app/`
+- 订阅端口:2096
+- 订阅路径:`/sub/`
+- 默认账号 / 密码:`admin` / `admin`(**生产前请立即修改**)
 
-[Other UI Screenshots](https://github.com/alireza0/s-ui-frontend/blob/main/screenshots.md)
+---
 
-## API Documentation
+## 一键脚本(Linux / macOS)
 
-[API-Documentation Wiki](https://github.com/alireza0/s-ui/wiki/API-Documentation)
+> 上游 `alireza0/s-ui` 的官方脚本仍然可用(它从 `alireza0/s-ui` releases 拉取二进制)。如果你希望使用本仓库的产物,需要先 fork-ready 本仓库并自行打 release。
 
-## Default Installation Information
-- Panel Port: 2095
-- Panel Path: /app/
-- Subscription Port: 2096
-- Subscription Path: /sub/
-- User/Password: admin
-
-## Install & Upgrade to Latest Version
-
-### Linux/macOS
+上游脚本(快速可用):
 ```sh
 bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh)
 ```
 
-### Windows
-1. Download the latest Windows release from [GitHub Releases](https://github.com/alireza0/s-ui/releases/latest)
-2. Extract the ZIP file
-3. Run `install-windows.bat` as Administrator
-4. Follow the installation wizard
+---
 
-## Install legacy Version
+## 从源码构建(本仓库)
 
-**Step 1:** To install your desired legacy version, add the version to the end of the installation command. e.g., ver `1.0.0`:
+### 前置依赖
+
+- **Go** 1.25+
+- **Node.js** 20+ / npm
+- C 编译器(CGO 需要,如 `gcc` / `clang`)
+
+### 一键构建
 
 ```sh
-VERSION=1.0.0 && bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/$VERSION/install.sh) $VERSION
+git clone https://github.com/DoBestone/nexcore-s-ui.git
+cd nexcore-s-ui
+./build.sh
 ```
 
-## Manual installation
+`build.sh` 会:
 
-### Linux/macOS
-1. Get the latest version of S-UI based on your OS/Architecture from GitHub: [https://github.com/alireza0/s-ui/releases/latest](https://github.com/alireza0/s-ui/releases/latest)
-2. **OPTIONAL** Get the latest version of `s-ui.sh` [https://raw.githubusercontent.com/alireza0/s-ui/master/s-ui.sh](https://raw.githubusercontent.com/alireza0/s-ui/master/s-ui.sh)
-3. **OPTIONAL** Copy `s-ui.sh` to /usr/bin/ and run `chmod +x /usr/bin/s-ui`.
-4. Extract s-ui tar.gz file to a directory of your choice and navigate to the directory where you extracted the tar.gz file.
-5. Copy *.service files to /etc/systemd/system/ and run `systemctl daemon-reload`.
-6. Enable autostart and start S-UI service using `systemctl enable s-ui --now`
-7. Start sing-box service using `systemctl enable sing-box --now`
+1. `cd frontend && npm i && npm run build` —— 输出 `frontend/dist/`
+2. `cp -R frontend/dist/* web/html/` —— 镜像静态资源到 Go embed 目录
+3. `go build -tags "with_quic,with_grpc,with_utls,with_acme,with_gvisor,with_naive_outbound,with_musl,badlinkname,tfogo_checklinkname0,with_tailscale" -o sui main.go`
 
-### Windows
-1. Get the latest Windows version from GitHub: [https://github.com/alireza0/s-ui/releases/latest](https://github.com/alireza0/s-ui/releases/latest)
-2. Download the appropriate Windows package (e.g., `s-ui-windows-amd64.zip`)
-3. Extract the ZIP file to a directory of your choice
-4. Run `install-windows.bat` as Administrator
-5. Follow the installation wizard
-6. Access the panel at http://localhost:2095/app
+最终产物:`./sui`(macOS arm64 约 53 MB,Linux 类似)。
 
-## Uninstall S-UI
+### 运行
+
+```sh
+./sui
+```
+
+默认监听 `2095`,浏览器打开 `http://127.0.0.1:2095/app/`,登录 `admin` / `admin`。
+
+---
+
+## 仅开发前端
+
+```sh
+cd frontend
+npm i
+npm run dev      # vite dev server, 默认 :3000,代理 /app/api → :2095
+```
+
+打开 `http://127.0.0.1:3000/`(后端需另开 `./sui`)。
+
+### 前端技术栈
+
+- **框架**:Vue 3.5 + TypeScript
+- **组件库**:Element Plus(按需注册,组件 CSS 自动按需注入)
+- **构建**:Vite 8 + unplugin-vue-components(ElementPlusResolver)+ unplugin-auto-import
+- **状态**:Pinia
+- **路由**:Vue Router 4
+- **i18n**:vue-i18n(异步按需加载语言包)
+- **图标**:`@element-plus/icons-vue`(线框风格,16 / 18 / 20 三档)
+- **图表**:chart.js + vue-chartjs(仅 Stats 模态加载)
+- **二维码**:qrcode.vue(仅 QrCode / WgQrCode 模态加载)
+
+### 构建产物路径契约
+
+```
+frontend/dist/  ──cp──>  web/html/  ──go:embed *──>  Go binary
+```
+
+`web/web.go` 通过 `embed.FS` 把 `web/html/index.html` 与 `web/html/assets/*` 打包进二进制,资源文件名用 8 字节随机 hash 防 CDN 缓存。**不要修改输出路径**,否则 Go embed 找不到资源。
+
+---
+
+## 卸载
 
 ```sh
 sudo -i
-
-systemctl disable s-ui  --now
-
+systemctl disable s-ui --now
 rm -f /etc/systemd/system/sing-box.service
 systemctl daemon-reload
-
 rm -fr /usr/local/s-ui
 rm /usr/bin/s-ui
 ```
 
-## Manual run ( contribution )
+---
 
-<details>
-   <summary>Click for details</summary>
+## 协议支持
 
-### Build and run whole project
-```shell
-./runSUI.sh
-```
+- 通用:Mixed / SOCKS / HTTP / HTTPS / Direct / Redirect / TProxy
+- V2Ray 系:VLESS / VMess / Trojan / Shadowsocks
+- 其它:ShadowTLS / Hysteria / Hysteria2 / Naive / TUIC / AnyTLS / WireGuard / Tailscale / Warp / Tor / SSH
+- 完整 XTLS 支持
+- Reality / ECH / ACME 集中证书管理
 
-### Clone the repository
-```shell
-# clone repository
-git clone https://github.com/alireza0/s-ui
-# clone submodules
-git submodule update --init --recursive
-```
+---
 
+## 环境变量
 
-### - Frontend
+| 变量             | 类型                                              | 默认       |
+| ---------------- | :-----------------------------------------------: | :--------- |
+| `SUI_LOG_LEVEL`  | `"debug"` \| `"info"` \| `"warn"` \| `"error"`    | `"info"`   |
+| `SUI_DEBUG`      | `boolean`                                         | `false`    |
+| `SUI_BIN_FOLDER` | `string`                                          | `"bin"`    |
+| `SUI_DB_FOLDER`  | `string`                                          | `"db"`     |
+| `SINGBOX_API`    | `string`                                          | -          |
 
-Visit [s-ui-frontend](https://github.com/alireza0/s-ui-frontend) for frontend code
+---
 
-### - Backend
-> Please build frontend once before!
-
-To build backend:
-```shell
-# remove old frontend compiled files
-rm -fr web/html/*
-# apply new frontend compiled files
-cp -R frontend/dist/ web/html/
-# build
-go build -o sui main.go
-```
-
-To run backend (from root folder of repository):
-```shell
-./sui
-```
-
-</details>
-
-## Languages
-
-- English
-- Farsi
-- Vietnamese
-- Chinese (Simplified)
-- Chinese (Traditional)
-- Russian
-
-## Features
-
-- Supported protocols:
-  - General:  Mixed, SOCKS, HTTP, HTTPS, Direct, Redirect, TProxy
-  - V2Ray based: VLESS, VMess, Trojan, Shadowsocks
-  - Other protocols: ShadowTLS, Hysteria, Hysteria2, Naive, TUIC
-- Supports XTLS protocols
-- An advanced interface for routing traffic, incorporating PROXY Protocol, External, and Transparent Proxy, SSL Certificate, and Port
-- An advanced interface for inbound and outbound configuration
-- Clients’ traffic cap and expiration date
-- Displays online clients, inbounds and outbounds with traffic statistics, and system status monitoring
-- Subscription service with ability to add external links and subscription
-- HTTPS for secure access to the web panel and subscription service (self-provided domain + SSL certificate)
-- Dark/Light theme
-
-## Environment Variables
-
-<details>
-  <summary>Click for details</summary>
-
-### Usage
-
-| Variable       |                      Type                      | Default       |
-| -------------- | :--------------------------------------------: | :------------ |
-| SUI_LOG_LEVEL  | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"`      |
-| SUI_DEBUG      |                   `boolean`                    | `false`       |
-| SUI_BIN_FOLDER |                    `string`                    | `"bin"`       |
-| SUI_DB_FOLDER  |                    `string`                    | `"db"`        |
-| SINGBOX_API    |                    `string`                    | -             |
-
-</details>
-
-## SSL Certificate
-
-<details>
-  <summary>Click for details</summary>
-
-### Certbot
+## SSL 证书(Certbot 简版)
 
 ```bash
 snap install core; snap refresh core
 snap install --classic certbot
 ln -s /snap/bin/certbot /usr/bin/certbot
-
-certbot certonly --standalone --register-unsafely-without-email --non-interactive --agree-tos -d <Your Domain Name>
+certbot certonly --standalone --register-unsafely-without-email \
+                 --non-interactive --agree-tos -d <你的域名>
 ```
 
-</details>
+---
 
-## Stargazers over Time
-[![Stargazers over time](https://starchart.cc/alireza0/s-ui.svg)](https://starchart.cc/alireza0/s-ui)
+## 文档
+
+- [`UI_MIGRATION_PLAN.md`](./UI_MIGRATION_PLAN.md) —— 迁移计划、阶段记录、风险登记、三轮审计修复明细 + 性能对比
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) —— 开发规范、分支管理、测试与 PR 流程
+- [`CLAUDE.md`](./CLAUDE.md) —— Claude 工作交接(本仓库专用执行规则)
+
+---
+
+## 致谢
+
+- [alireza0/s-ui](https://github.com/alireza0/s-ui) —— 上游原作者,Sing-Box 控制面板的核心实现
+- [SagerNet/sing-box](https://github.com/SagerNet/sing-box) —— 协议栈
+- [Element Plus](https://element-plus.org/) —— 组件库
+- [Vue 3](https://vuejs.org/) —— 前端框架
+
+---
+
+## 许可
+
+GPL v3 —— 与上游一致。
