@@ -18,7 +18,7 @@ var (
 )
 
 func InitLogger(level logging.Level) {
-	newLogger := logging.MustGetLogger("s-ui")
+	newLogger := logging.MustGetLogger("nexcore-s-ui")
 	var err error
 	var backend logging.Backend
 	var format logging.Formatter
@@ -34,7 +34,7 @@ func InitLogger(level logging.Level) {
 
 	backendFormatter := logging.NewBackendFormatter(backend, format)
 	backendLeveled := logging.AddModuleLevel(backendFormatter)
-	backendLeveled.SetLevel(level, "s-ui")
+	backendLeveled.SetLevel(level, "nexcore-s-ui")
 	newLogger.SetBackend(backendLeveled)
 
 	logger = newLogger

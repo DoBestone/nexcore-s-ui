@@ -54,9 +54,9 @@ func GetDBFolderPath() string {
 		if err != nil {
 			// Cross-platform fallback path
 			if runtime.GOOS == "windows" {
-				return "C:\\Program Files\\s-ui\\db"
+				return "C:\\Program Files\\nexcore-s-ui\\db"
 			}
-			return "/usr/local/s-ui/db"
+			return "/usr/local/nexcore-s-ui/db"
 		}
 		dbFolderPath = filepath.Join(dir, "db")
 	}

@@ -105,25 +105,25 @@ jobs:
           go build -ldflags="-w -s -checklinkname=0" -tags "${{ env.TAGS }}" -o sui.exe main.go
           file sui.exe
           
-          mkdir s-ui-windows
-          cp sui.exe s-ui-windows/
-          cp -r windows/* s-ui-windows/
+          mkdir nexcore-s-ui-windows
+          cp sui.exe nexcore-s-ui-windows/
+          cp -r windows/* nexcore-s-ui-windows/
 
       - name: Download libcronet-go
         shell: bash
         run: |
-          curl -qsL -o s-ui-windows/libcronet.dll ${{ env.LIBCRONET_BASE_URL }}/libcronet-windows-${{ matrix.arch }}.dll
+          curl -qsL -o nexcore-s-ui-windows/libcronet.dll ${{ env.LIBCRONET_BASE_URL }}/libcronet-windows-${{ matrix.arch }}.dll
 
       - name: Package
         shell: bash
         run: |
-          zip -r "s-ui-windows-${{ matrix.arch }}.zip" s-ui-windows
+          zip -r "nexcore-s-ui-windows-${{ matrix.arch }}.zip" nexcore-s-ui-windows
 
       - name: Upload files to Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: s-ui-windows-${{ matrix.arch }}
-          path: ./s-ui-windows-${{ matrix.arch }}.zip
+          name: nexcore-s-ui-windows-${{ matrix.arch }}
+          path: ./nexcore-s-ui-windows-${{ matrix.arch }}.zip
           retention-days: 30
 
       - name: Upload to Release
@@ -134,7 +134,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
-          file: s-ui-windows-${{ matrix.arch }}.zip
-          asset_name: s-ui-windows-${{ matrix.arch }}.zip
+          file: nexcore-s-ui-windows-${{ matrix.arch }}.zip
+          asset_name: nexcore-s-ui-windows-${{ matrix.arch }}.zip
           prerelease: true
           overwrite: true

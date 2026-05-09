@@ -1,20 +1,24 @@
 #!/bin/bash
 # nexcore-s-ui · install (fresh install only — for upgrades use update.sh
-# or `s-ui update`).
+# or `nexcore-s-ui update`).
 #
 # 用法:
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
-#   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) v1.4.1
+#   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) v1.0.0
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) --force
 #
-# 想从上游 alireza0/s-ui release 拉(本仓库未自打 release 时):
-#   GH_OWNER=alireza0 GH_REPO=s-ui bash <(curl -Ls .../install.sh)
+# 与上游 alireza0/s-ui 完全独立,可在同一台机器共存:
+#   - 安装目录    /usr/local/nexcore-s-ui/      (上游是 /usr/local/s-ui/)
+#   - systemd     nexcore-s-ui.service          (上游是 s-ui.service)
+#   - CLI 命令    /usr/bin/nexcore-s-ui         (上游是 /usr/bin/s-ui)
+#   - 数据库      /usr/local/nexcore-s-ui/db/nexcore-s-ui.db
+#                                               (上游是 /usr/local/s-ui/db/s-ui.db)
+#   - 默认端口    面板 3095 / 订阅 3096        (上游是 2095 / 2096)
 #
 # 可覆盖默认值的环境变量:
 #   GH_OWNER  GH_REPO  INSTALL_DIR  PKG_PREFIX  CMD_NAME  SERVICE_NAME
 #
-# 与 nexcore-x-ui 思路一致:首装走全自动随机凭据,装完立即 echo 出
-# 用户名/密码/面板 URI;这是 v1.0 之前老脚本一堆 read -p 交互的取代品。
+# 首装全自动随机凭据,装完立即 echo 出用户名/密码/面板 URI。
 
 set -eo pipefail
 
@@ -25,12 +29,12 @@ blue='\033[0;34m'
 cyan='\033[0;36m'
 plain='\033[0m'
 
-CMD_NAME="${CMD_NAME:-s-ui}"
+CMD_NAME="${CMD_NAME:-nexcore-s-ui}"
 SERVICE_NAME="${SERVICE_NAME:-${CMD_NAME}}"
 GH_OWNER="${GH_OWNER:-DoBestone}"
 GH_REPO="${GH_REPO:-nexcore-s-ui}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/${CMD_NAME}}"
-PKG_PREFIX="${PKG_PREFIX:-s-ui}"   # tarball 解压顶层目录名,与 release 包结构一致
+PKG_PREFIX="${PKG_PREFIX:-nexcore-s-ui}"   # tarball 解压顶层目录名,与 release 包结构一致
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 DB_PATH="${INSTALL_DIR}/db/${CMD_NAME}.db"
 

@@ -86,14 +86,14 @@ for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /i "IPv4"') do (
 
 REM Get panel configuration
 echo.
-set /p panel_port="Enter panel port (default: 2095): "
-if "%panel_port%"=="" set "panel_port=2095"
+set /p panel_port="Enter panel port (default: 3095): "
+if "%panel_port%"=="" set "panel_port=3095"
 
 set /p panel_path="Enter panel path (default: /app/): "
 if "%panel_path%"=="" set "panel_path=/app/"
 
-set /p sub_port="Enter subscription port (default: 2096): "
-if "%sub_port%"=="" set "sub_port=2096"
+set /p sub_port="Enter subscription port (default: 3096): "
+if "%sub_port%"=="" set "sub_port=3096"
 
 set /p sub_path="Enter subscription path (default: /sub/): "
 if "%sub_path%"=="" set "sub_path=/sub/"

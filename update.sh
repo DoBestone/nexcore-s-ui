@@ -3,7 +3,7 @@
 #
 # 用法:
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh)
-#   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh) v1.4.1
+#   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh) v1.0.0
 #
 # 与 install.sh 的区别:
 #   - 不重装系统依赖
@@ -11,8 +11,7 @@
 #   - .service 文件 release 中变化时刷 + 备份旧版到 .bak.<timestamp>
 #   - 只:下载 tarball → stop → 替换 sui + ${CMD_NAME}.sh + bin/ → 刷 unit(如有改) → migrate → start
 #
-# 想从上游 alireza0/s-ui release 拉:
-#   GH_OWNER=alireza0 GH_REPO=s-ui bash <(curl -Ls .../update.sh)
+# 与上游 alireza0/s-ui 完全独立,可在同一台机器共存(详见 install.sh 头部注释)。
 #
 # 可覆盖的环境变量:
 #   GH_OWNER  GH_REPO  INSTALL_DIR  PKG_PREFIX  CMD_NAME  SERVICE_NAME
@@ -24,12 +23,12 @@ green='\033[0;32m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
-CMD_NAME="${CMD_NAME:-s-ui}"
+CMD_NAME="${CMD_NAME:-nexcore-s-ui}"
 SERVICE_NAME="${SERVICE_NAME:-${CMD_NAME}}"
 GH_OWNER="${GH_OWNER:-DoBestone}"
 GH_REPO="${GH_REPO:-nexcore-s-ui}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/${CMD_NAME}}"
-PKG_PREFIX="${PKG_PREFIX:-s-ui}"
+PKG_PREFIX="${PKG_PREFIX:-nexcore-s-ui}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 # ---------- preflight ----------

@@ -63,7 +63,7 @@ before_show_menu() {
 }
 
 install() {
-    bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/main/install.sh)
+    bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
     if [[ $? == 0 ]]; then
         if [[ $# == 0 ]]; then
             start
@@ -82,7 +82,7 @@ update() {
         fi
         return 0
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/main/install.sh)
+    bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
     if [[ $? == 0 ]]; then
         LOGI "Update is complete, Panel has automatically restarted "
         exit 0
@@ -98,7 +98,7 @@ custom_version() {
     exit 1
     fi
 
-    download_link="https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh"
+    download_link="https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/master/install.sh"
 
     install_command="bash <(curl -Ls $download_link) $panel_version"
 
@@ -114,16 +114,16 @@ uninstall() {
         fi
         return 0
     fi
-    systemctl stop s-ui
-    systemctl disable s-ui
-    rm /etc/systemd/system/s-ui.service -f
+    systemctl stop nexcore-s-ui
+    systemctl disable nexcore-s-ui
+    rm /etc/systemd/system/nexcore-s-ui.service -f
     systemctl daemon-reload
     systemctl reset-failed
-    rm /etc/s-ui/ -rf
-    rm /usr/local/s-ui/ -rf
+    rm /etc/nexcore-s-ui/ -rf
+    rm /usr/local/nexcore-s-ui/ -rf
 
     echo ""
-    echo -e "Uninstalled Successfully, If you want to remove this script, then after exiting the script run ${green}rm /usr/local/s-ui -f${plain} to delete it."
+    echo -e "Uninstalled Successfully, If you want to remove this script, then after exiting the script run ${green}rm /usr/local/nexcore-s-ui -f${plain} to delete it."
     echo ""
 
     if [[ $# == 0 ]]; then
@@ -135,7 +135,7 @@ reset_admin() {
     echo "It is not recommended to set admin's credentials to default!"
     confirm "Are you sure you want to reset admin's credentials to default ?" "n"
     if [[ $? == 0 ]]; then
-        /usr/local/s-ui/sui admin -reset
+        /usr/local/nexcore-s-ui/sui admin -reset
     fi
     before_show_menu
 }
@@ -144,19 +144,19 @@ set_admin() {
     echo "It is not recommended to set admin's credentials to a complex text."
     read -p "Please set up your username:" config_account
     read -p "Please set up your password:" config_password
-    /usr/local/s-ui/sui admin -username ${config_account} -password ${config_password}
+    /usr/local/nexcore-s-ui/sui admin -username ${config_account} -password ${config_password}
     before_show_menu
 }
 
 view_admin() {
-    /usr/local/s-ui/sui admin -show
+    /usr/local/nexcore-s-ui/sui admin -show
     before_show_menu
 }
 
 reset_setting() {
     confirm "Are you sure you want to reset settings to default ?" "n"
     if [[ $? == 0 ]]; then
-        /usr/local/s-ui/sui setting -reset
+        /usr/local/nexcore-s-ui/sui setting -reset
     fi
     before_show_menu
 }
@@ -178,18 +178,18 @@ set_setting() {
     [ -z "$config_path" ] || params="$params -path $config_path"
     [ -z "$config_subPort" ] || params="$params -subPort $config_subPort"
     [ -z "$config_subPath" ] || params="$params -subPath $config_subPath"
-    /usr/local/s-ui/sui setting ${params}
+    /usr/local/nexcore-s-ui/sui setting ${params}
     before_show_menu
 }
 
 view_setting() {
-    /usr/local/s-ui/sui setting -show
+    /usr/local/nexcore-s-ui/sui setting -show
     view_uri
     before_show_menu
 }
 
 view_uri() {
-    info=$(/usr/local/s-ui/sui uri)
+    info=$(/usr/local/nexcore-s-ui/sui uri)
     if [[ $? != 0 ]]; then
         LOGE "Get current uri error"
         before_show_menu
@@ -255,7 +255,7 @@ restart() {
 }
 
 status() {
-    systemctl status s-ui -l
+    systemctl status nexcore-s-ui -l
     if [[ $# == 0 ]]; then
         before_show_menu
     fi
@@ -295,13 +295,13 @@ show_log() {
 }
 
 update_shell() {
-    wget -O /usr/bin/s-ui -N --no-check-certificate https://github.com/alireza0/s-ui/raw/main/s-ui.sh
+    wget -O /usr/bin/nexcore-s-ui -N --no-check-certificate https://github.com/DoBestone/nexcore-s-ui/raw/main/nexcore-s-ui.sh
     if [[ $? != 0 ]]; then
         echo ""
         LOGE "Failed to download script, Please check whether the machine can connect Github"
         before_show_menu
     else
-        chmod +x /usr/bin/s-ui
+        chmod +x /usr/bin/nexcore-s-ui
         LOGI "Upgrade script succeeded, Please rerun the script" && exit 0
     fi
 }
@@ -328,7 +328,7 @@ check_enabled() {
 }
 
 check_uninstall() {
-    check_status s-ui
+    check_status nexcore-s-ui
     if [[ $? != 2 ]]; then
         echo ""
         LOGE "Panel is already installed, Please do not reinstall"
@@ -342,7 +342,7 @@ check_uninstall() {
 }
 
 check_install() {
-    check_status s-ui
+    check_status nexcore-s-ui
     if [[ $? == 2 ]]; then
         echo ""
         LOGE "Please install the panel first"
@@ -381,7 +381,7 @@ show_enable_status() {
     fi
 }
 
-check_s-ui_status() {
+check_status_panel() {
     count=$(ps -ef | grep "sui" | grep -v "grep" | wc -l)
     if [[ count -ne 0 ]]; then
         return 0
@@ -390,12 +390,12 @@ check_s-ui_status() {
     fi
 }
 
-show_s-ui_status() {
-    check_s-ui_status
+show_status_panel() {
+    check_status_panel
     if [[ $? == 0 ]]; then
-        echo -e "s-ui state: ${green}Running${plain}"
+        echo -e "nexcore-s-ui state: ${green}Running${plain}"
     else
-        echo -e "s-ui state: ${red}Not Running${plain}"
+        echo -e "nexcore-s-ui state: ${red}Not Running${plain}"
     fi
 }
 
@@ -775,18 +775,18 @@ show_usage() {
     echo -e "S-UI Control Menu Usage"
     echo -e "------------------------------------------"
     echo -e "SUBCOMMANDS:" 
-    echo -e "s-ui              - Admin Management Script"
-    echo -e "s-ui start        - Start s-ui"
-    echo -e "s-ui stop         - Stop s-ui"
-    echo -e "s-ui restart      - Restart s-ui"
-    echo -e "s-ui status       - Current Status of s-ui"
-    echo -e "s-ui enable       - Enable Autostart on OS Startup"
-    echo -e "s-ui disable      - Disable Autostart on OS Startup"
-    echo -e "s-ui log          - Check s-ui Logs"
-    echo -e "s-ui update       - Update"
-    echo -e "s-ui install      - Install"
-    echo -e "s-ui uninstall    - Uninstall"
-    echo -e "s-ui help         - Control Menu Usage"
+    echo -e "nexcore-s-ui              - Admin Management Script"
+    echo -e "nexcore-s-ui start        - Start nexcore-s-ui"
+    echo -e "nexcore-s-ui stop         - Stop nexcore-s-ui"
+    echo -e "nexcore-s-ui restart      - Restart nexcore-s-ui"
+    echo -e "nexcore-s-ui status       - Current Status of nexcore-s-ui"
+    echo -e "nexcore-s-ui enable       - Enable Autostart on OS Startup"
+    echo -e "nexcore-s-ui disable      - Disable Autostart on OS Startup"
+    echo -e "nexcore-s-ui log          - Check nexcore-s-ui Logs"
+    echo -e "nexcore-s-ui update       - Update"
+    echo -e "nexcore-s-ui install      - Install"
+    echo -e "nexcore-s-ui uninstall    - Uninstall"
+    echo -e "nexcore-s-ui help         - Control Menu Usage"
     echo -e "------------------------------------------"
 }
 
@@ -822,7 +822,7 @@ show_menu() {
   ${green}20.${plain} Cloudflare SSL Certificate
 ————————————————————————————————
  "
-    show_status s-ui
+    show_status nexcore-s-ui
     echo && read -p "Please enter your selection [0-20]: " num
 
     case "${num}" in
@@ -860,25 +860,25 @@ show_menu() {
         check_install && view_setting
         ;;
     11)
-        check_install && start s-ui
+        check_install && start nexcore-s-ui
         ;;
     12)
-        check_install && stop s-ui
+        check_install && stop nexcore-s-ui
         ;;
     13)
-        check_install && restart s-ui
+        check_install && restart nexcore-s-ui
         ;;
     14)
-        check_install && status s-ui
+        check_install && status nexcore-s-ui
         ;;
     15)
-        check_install && show_log s-ui
+        check_install && show_log nexcore-s-ui
         ;;
     16)
-        check_install && enable s-ui
+        check_install && enable nexcore-s-ui
         ;;
     17)
-        check_install && disable s-ui
+        check_install && disable nexcore-s-ui
         ;;
     18)
         bbr_menu
@@ -898,25 +898,25 @@ show_menu() {
 if [[ $# > 0 ]]; then
     case $1 in
     "start")
-        check_install 0 && start s-ui 0
+        check_install 0 && start nexcore-s-ui 0
         ;;
     "stop")
-        check_install 0 && stop s-ui 0
+        check_install 0 && stop nexcore-s-ui 0
         ;;
     "restart")
-        check_install 0 && restart s-ui 0
+        check_install 0 && restart nexcore-s-ui 0
         ;;
     "status")
         check_install 0 && status 0
         ;;
     "enable")
-        check_install 0 && enable s-ui 0
+        check_install 0 && enable nexcore-s-ui 0
         ;;
     "disable")
-        check_install 0 && disable s-ui 0
+        check_install 0 && disable nexcore-s-ui 0
         ;;
     "log")
-        check_install 0 && show_log s-ui 0
+        check_install 0 && show_log nexcore-s-ui 0
         ;;
     "update")
         check_install 0 && update 0
