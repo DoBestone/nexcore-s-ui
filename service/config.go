@@ -96,7 +96,9 @@ func (s *ConfigService) StartCore() error {
 		return nil
 	}
 	if time.Since(lastStartFailTime) < startCooldown {
-		logger.Info("start core cooldown ", startCooldown/time.Second, " seconds")
+		// startCooldown / time.Second 仍是 time.Duration 类型,String() 输出
+		// 它的纳秒数(如 "15ns")。强转 int64 才得到字面量秒数。
+		logger.Info("start core cooldown ", int64(startCooldown/time.Second), " seconds")
 		startCoreMu.Unlock()
 		return nil
 	}

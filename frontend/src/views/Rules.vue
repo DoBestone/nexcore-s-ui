@@ -21,11 +21,11 @@
               <el-dropdown-item @click="applyTemplate('block-ads')">
                 <el-icon style="margin-right: 6px"><CircleClose /></el-icon>{{ $t('rule.tmpl.blockAds') }}
               </el-dropdown-item>
-              <el-dropdown-item @click="applyTemplate('block-malware')">
-                <el-icon style="margin-right: 6px"><Warning /></el-icon>{{ $t('rule.tmpl.blockMalware') }}
+              <el-dropdown-item @click="applyTemplate('block-tracker')">
+                <el-icon style="margin-right: 6px"><Warning /></el-icon>{{ $t('rule.tmpl.blockTracker') }}
               </el-dropdown-item>
-              <el-dropdown-item @click="applyTemplate('block-phishing')">
-                <el-icon style="margin-right: 6px"><WarnTriangleFilled /></el-icon>{{ $t('rule.tmpl.blockPhishing') }}
+              <el-dropdown-item @click="applyTemplate('block-porn')">
+                <el-icon style="margin-right: 6px"><WarnTriangleFilled /></el-icon>{{ $t('rule.tmpl.blockPorn') }}
               </el-dropdown-item>
               <el-dropdown-item @click="applyTemplate('cn-direct')">
                 <el-icon style="margin-right: 6px"><Location /></el-icon>{{ $t('rule.tmpl.cnDirect') }}
@@ -33,7 +33,7 @@
               <el-dropdown-item @click="applyTemplate('private-direct')">
                 <el-icon style="margin-right: 6px"><Lock /></el-icon>{{ $t('rule.tmpl.privateDirect') }}
               </el-dropdown-item>
-              <el-dropdown-item divided @click="applyTemplate('block-ads,block-malware,block-phishing,private-direct,cn-direct')">
+              <el-dropdown-item divided @click="applyTemplate('block-ads,block-tracker,private-direct,cn-direct')">
                 <el-icon style="margin-right: 6px"><Star /></el-icon>{{ $t('rule.tmpl.recommended') }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -298,32 +298,37 @@ const saveRulesetModal = (data: ruleset) => {
 const delRuleset = (index: number) => { rulesets.value.splice(index, 1) }
 
 // ---------- 一键路由模板 ----------
+// URL 必须实际存在于 sing-geosite/rule-set 分支(2026-05 校验过)。
+// SagerNet/sing-geosite 是从 v2fly geosite 派生,不维护安全相关分类
+// (没有 malware/phishing/cryptominers),所以这里只放真实存在的 srs。
 // 每个 template 给一个 rule_set + 一条 rule。reject 类用 action=reject;
 // 直连类用 outbound=direct。详情可在生成后双击编辑微调。
+const SRS_BASE = 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set'
+
 const TEMPLATES: Record<string, { tag: string; url: string; action?: string; outbound?: string }> = {
   'block-ads': {
     tag: 'tmpl-ads',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
+    url: `${SRS_BASE}/geosite-category-ads-all.srs`,
     action: 'reject',
   },
-  'block-malware': {
-    tag: 'tmpl-malware',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-malware.srs',
+  'block-tracker': {
+    tag: 'tmpl-tracker',
+    url: `${SRS_BASE}/geosite-category-public-tracker.srs`,
     action: 'reject',
   },
-  'block-phishing': {
-    tag: 'tmpl-phishing',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-phishing.srs',
+  'block-porn': {
+    tag: 'tmpl-porn',
+    url: `${SRS_BASE}/geosite-category-porn.srs`,
     action: 'reject',
   },
   'cn-direct': {
     tag: 'tmpl-cn',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs',
+    url: `${SRS_BASE}/geosite-cn.srs`,
     outbound: 'direct',
   },
   'private-direct': {
     tag: 'tmpl-private',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-private.srs',
+    url: `${SRS_BASE}/geosite-private.srs`,
     outbound: 'direct',
   },
 }

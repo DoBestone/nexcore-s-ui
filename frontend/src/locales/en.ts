@@ -501,8 +501,8 @@ export default {
     tmpl: {
       title: "Templates",
       blockAds: "Block ads",
-      blockMalware: "Block malware",
-      blockPhishing: "Block phishing",
+      blockTracker: "Block trackers",
+      blockPorn: "Block adult sites",
       cnDirect: "Mainland CN direct",
       privateDirect: "Private IP direct",
       recommended: "Apply recommended bundle",

@@ -501,8 +501,8 @@ export default {
     tmpl: {
       title: "规则模板",
       blockAds: "屏蔽广告",
-      blockMalware: "屏蔽恶意软件",
-      blockPhishing: "屏蔽钓鱼站",
+      blockTracker: "屏蔽追踪器",
+      blockPorn: "屏蔽成人内容",
       cnDirect: "中国大陆直连",
       privateDirect: "私有 IP 直连",
       recommended: "一键推荐套装",
