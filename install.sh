@@ -159,10 +159,11 @@ resolve_version() {
     # 用 /releases?per_page=1 而非 /releases/latest:后者忽略所有 prerelease,
     # 而本仓库 CI 默认会把每个 tag 发为 prerelease(直到 maintainer 手动 promote
     # 成正式 release)。前者直接返回最新一条 — 不论 prerelease 与否。
-    local v
-    v=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=1" \
-        | grep -m1 -E '"tag_name":' \
-        | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    # 先把 API 响应整段读完再 grep,避免 grep -m1 早退导致 curl SIGPIPE
+    # 在 set -o pipefail 下报 curl 23 ("Failure writing output to destination")。
+    local raw v
+    raw=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=1" 2>/dev/null || true)
+    v=$(printf '%s\n' "$raw" | grep -m1 -E '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     if [[ -z "$v" ]]; then
         die "无法获取最新版本号(GitHub API 限流?或仓库尚无 release)"
     fi

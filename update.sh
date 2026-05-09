@@ -66,16 +66,25 @@ if [[ -z "${TARGET}" ]]; then
     echo -e "${green}查询最新版本…${plain}"
     # /releases?per_page=1 取最新条目(包含 prerelease);/releases/latest 会跳过
     # prerelease,不适合本仓库默认发布策略。
-    TARGET=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=1" \
-        | grep -m1 -E '"tag_name":' \
-        | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    # 先把 API 响应读完整再 grep — 避免 grep -m1 早退导致 curl 收 SIGPIPE,
+    # 在 set -o pipefail 下整管道非 0 + curl 23 报 "Failure writing".
+    RAW=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=1" 2>/dev/null || true)
+    TARGET=$(printf '%s\n' "$RAW" | grep -m1 -E '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     if [[ -z "${TARGET}" ]]; then
         echo -e "${red}无法获取最新版本(GitHub API 限流?或仓库尚无 release)${plain}" >&2
         exit 1
     fi
 fi
 
-CURRENT=$("${INSTALL_DIR}/sui" -v 2>/dev/null | head -n1 | awk '{print $NF}' || echo unknown)
+# get-current-version helper —— 同样避免 head -n1 触发 SIGPIPE 把 sui 杀掉,
+# 让 pipefail 把整管道判失败,导致 || echo unknown 触发把 "unknown" 追加进变量。
+get_sui_version() {
+    local out
+    out=$("${INSTALL_DIR}/sui" -v 2>/dev/null || true)
+    printf '%s\n' "$out" | head -n1 | awk '{print $NF}'
+}
+CURRENT=$(get_sui_version)
+[[ -z "${CURRENT}" ]] && CURRENT="unknown"
 echo -e "${green}当前:${plain} ${CURRENT}  ${green}目标:${plain} ${TARGET}  ${green}架构:${plain} ${ARCH}"
 
 if [[ "${TARGET}" == "${CURRENT}" || "${TARGET}" == "v${CURRENT}" ]]; then
@@ -176,7 +185,8 @@ if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
     exit 1
 fi
 
-NEW=$("${INSTALL_DIR}/sui" -v 2>/dev/null | head -n1 | awk '{print $NF}' || echo unknown)
+NEW=$(get_sui_version)
+[[ -z "${NEW}" ]] && NEW="unknown"
 echo
 echo -e "${green}═════════════════════════════════════════════${plain}"
 echo -e "${green}  升级完成: ${CURRENT} → ${NEW}${plain}"
