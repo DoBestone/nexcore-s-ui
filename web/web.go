@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alireza0/s-ui/api"
+	apiv1 "github.com/alireza0/s-ui/api/v1"
 	"github.com/alireza0/s-ui/config"
 	"github.com/alireza0/s-ui/logger"
 	"github.com/alireza0/s-ui/middleware"
@@ -109,6 +110,14 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	group_api := engine.Group(base_url + "api")
 	api.NewAPIHandler(group_api, apiv2)
+
+	// /api/v1 — nexcore-x-ui 兼容层。路径与响应壳完全等价于 x-ui 的 REST,
+	// 让一份主控对接代码同时管 x-ui 和 s-ui 节点(详见 api/v1/v1.go 顶部注释)。
+	if err := apiv1.Reload(); err != nil {
+		logger.Warning("api/v1 token cache reload failed:", err)
+	}
+	group_v1 := engine.Group(base_url + "api/v1")
+	apiv1.New(group_v1)
 
 	// Serve index.html as the entry point
 	// Handle all other routes by serving index.html

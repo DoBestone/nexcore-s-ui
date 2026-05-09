@@ -102,6 +102,7 @@ func InitDB(dbPath string) error {
 		&model.Stats{},
 		&model.Client{},
 		&model.Changes{},
+		&model.ApiLog{},
 	)
 	if err != nil {
 		return err

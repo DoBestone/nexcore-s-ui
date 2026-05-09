@@ -71,3 +71,18 @@ type Tokens struct {
 	UserId uint   `json:"userId" form:"userId"`
 	User   *User  `json:"user" gorm:"foreignKey:UserId;references:Id"`
 }
+
+// ApiLog 记录每一次 /apiv2/* 调用 - 给操作员审计 / debug 用。
+// 不记录 /api/*(面板自身),不然会被前端轮询(load/onlines)刷爆。
+type ApiLog struct {
+	Id        uint64 `json:"id" gorm:"primaryKey;autoIncrement"`
+	DateTime  int64  `json:"dateTime" gorm:"index"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Status    int    `json:"status"`
+	LatencyMs int64  `json:"latencyMs"`
+	RemoteIp  string `json:"remoteIp"`
+	Username  string `json:"username"`
+	TokenDesc string `json:"tokenDesc"`
+	Err       string `json:"err"`
+}

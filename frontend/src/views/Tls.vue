@@ -6,6 +6,9 @@
         <p class="page-desc">{{ $t('tls.desc', 'TLS / Reality / ECH / ACME 证书集中管理') }}</p>
       </div>
       <div class="page-header-actions">
+        <el-button @click="cfDialog.visible = true">
+          <el-icon><Cloudy /></el-icon>{{ $t('tls.cf.button') }}
+        </el-button>
         <el-button type="primary" @click="showModal(0)">
           <el-icon><Plus /></el-icon>{{ $t('actions.add') }}
         </el-button>
@@ -81,6 +84,11 @@
       @close="closeModal"
       @save="saveModal"
     />
+    <CloudflareTlsVue
+      v-model="cfDialog.visible"
+      :visible="cfDialog.visible"
+      @close="cfDialog.visible = false"
+    />
   </div>
 </template>
 
@@ -91,13 +99,15 @@ import { Inbound } from '@/types/inbounds'
 import { tls } from '@/types/tls'
 
 const TlsVue = defineAsyncComponent(() => import('@/layouts/modals/Tls.vue'))
-import { Plus, Edit, Delete, CopyDocument, Box } from '@element-plus/icons-vue'
+const CloudflareTlsVue = defineAsyncComponent(() => import('@/layouts/modals/CloudflareTls.vue'))
+import { Plus, Edit, Delete, CopyDocument, Box, Cloudy } from '@element-plus/icons-vue'
 
 const tlsConfigs = computed((): any[] => Data().tlsConfigs ?? [])
 const inbounds = computed((): Inbound[] => Data().inbounds ?? [])
 const tlsInbounds = (id: number): string[] => inbounds.value.filter((i) => i.tls_id == id).map((i) => i.tag)
 
 const modal = ref({ visible: false, id: 0, data: '' })
+const cfDialog = ref({ visible: false })
 
 const showModal = (id: number) => {
   modal.value.id = id

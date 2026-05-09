@@ -49,6 +49,7 @@ export default {
     basics: "Основы",
     dns: "DNS",
     admins: "Администраторы",
+    api: "API",
     settings: "Настройки",
   },
   main: {

@@ -14,6 +14,33 @@
         </el-button>
         <el-dropdown trigger="click">
           <el-button>
+            <el-icon><MagicStick /></el-icon>{{ $t('rule.tmpl.title') }}
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="applyTemplate('block-ads')">
+                <el-icon style="margin-right: 6px"><CircleClose /></el-icon>{{ $t('rule.tmpl.blockAds') }}
+              </el-dropdown-item>
+              <el-dropdown-item @click="applyTemplate('block-malware')">
+                <el-icon style="margin-right: 6px"><Warning /></el-icon>{{ $t('rule.tmpl.blockMalware') }}
+              </el-dropdown-item>
+              <el-dropdown-item @click="applyTemplate('block-phishing')">
+                <el-icon style="margin-right: 6px"><WarnTriangleFilled /></el-icon>{{ $t('rule.tmpl.blockPhishing') }}
+              </el-dropdown-item>
+              <el-dropdown-item @click="applyTemplate('cn-direct')">
+                <el-icon style="margin-right: 6px"><Location /></el-icon>{{ $t('rule.tmpl.cnDirect') }}
+              </el-dropdown-item>
+              <el-dropdown-item @click="applyTemplate('private-direct')">
+                <el-icon style="margin-right: 6px"><Lock /></el-icon>{{ $t('rule.tmpl.privateDirect') }}
+              </el-dropdown-item>
+              <el-dropdown-item divided @click="applyTemplate('block-ads,block-malware,block-phishing,private-direct,cn-direct')">
+                <el-icon style="margin-right: 6px"><Star /></el-icon>{{ $t('rule.tmpl.recommended') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click">
+          <el-button>
             <el-icon><Tools /></el-icon>{{ $t('rule.import.title', '导入') }}
           </el-button>
           <template #dropdown>
@@ -178,7 +205,9 @@ const RuleImport = defineAsyncComponent(() => import('@/layouts/modals/RuleImpor
 import { Config } from '@/types/config'
 import { actionKeys, ruleset } from '@/types/rules'
 import { FindDiff } from '@/plugins/utils'
-import { Plus, Edit, Delete, Tools, Connection, Download, Check } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Tools, Connection, Download, Check, MagicStick, CircleClose, Warning, WarnTriangleFilled, Location, Lock, Star } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { i18n } from '@/locales'
 
 const oldConfig = ref({})
 const loading = ref(false)
@@ -267,6 +296,68 @@ const saveRulesetModal = (data: ruleset) => {
   rulesetModal.value.visible = false
 }
 const delRuleset = (index: number) => { rulesets.value.splice(index, 1) }
+
+// ---------- 一键路由模板 ----------
+// 每个 template 给一个 rule_set + 一条 rule。reject 类用 action=reject;
+// 直连类用 outbound=direct。详情可在生成后双击编辑微调。
+const TEMPLATES: Record<string, { tag: string; url: string; action?: string; outbound?: string }> = {
+  'block-ads': {
+    tag: 'tmpl-ads',
+    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
+    action: 'reject',
+  },
+  'block-malware': {
+    tag: 'tmpl-malware',
+    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-malware.srs',
+    action: 'reject',
+  },
+  'block-phishing': {
+    tag: 'tmpl-phishing',
+    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-phishing.srs',
+    action: 'reject',
+  },
+  'cn-direct': {
+    tag: 'tmpl-cn',
+    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs',
+    outbound: 'direct',
+  },
+  'private-direct': {
+    tag: 'tmpl-private',
+    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-private.srs',
+    outbound: 'direct',
+  },
+}
+
+const applyTemplate = (keysCsv: string) => {
+  let added = 0
+  let skipped: string[] = []
+  for (const key of keysCsv.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const t = TEMPLATES[key]
+    if (!t) continue
+    if (rulesets.value.some((rs: any) => rs.tag === t.tag)) {
+      skipped.push(t.tag)
+      continue
+    }
+    rulesets.value.push({
+      tag: t.tag,
+      type: 'remote',
+      format: 'binary',
+      url: t.url,
+      download_detour: 'direct',
+      update_interval: '24h',
+    } as any)
+    const rule: any = { rule_set: [t.tag] }
+    if (t.action) rule.action = t.action
+    else if (t.outbound) rule.outbound = t.outbound
+    rules.value.push(rule)
+    added++
+  }
+  if (added > 0) {
+    ElMessage.success(`${i18n.global.t('rule.tmpl.applied')}: +${added}`)
+  } else if (skipped.length > 0) {
+    ElMessage.info(`${i18n.global.t('rule.tmpl.alreadyExists')}: ${skipped.join(', ')}`)
+  }
+}
 
 const draggedItemIndex = ref<number | null>(null)
 const onDragStart = (index: number) => { draggedItemIndex.value = index }

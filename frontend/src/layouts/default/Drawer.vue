@@ -61,6 +61,7 @@ import {
   Promotion,
   Avatar,
   Tools,
+  Cpu,
   Close,
   SwitchButton,
 } from '@element-plus/icons-vue'
@@ -89,6 +90,7 @@ const menu = [
   { title: 'pages.rules',     icon: markRaw(Connection),  path: '/rules' },
   { title: 'pages.dns',       icon: markRaw(Promotion),   path: '/dns' },
   { title: 'pages.admins',    icon: markRaw(Avatar),      path: '/admins' },
+  { title: 'pages.api',       icon: markRaw(Cpu),         path: '/api' },
   { title: 'pages.settings',  icon: markRaw(Setting),     path: '/settings' },
 ]
 

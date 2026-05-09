@@ -70,6 +70,11 @@ const routes = [
         component: () => import('@/views/Admins.vue'),
       },
       {
+        path: '/api',
+        name: 'pages.api',
+        component: () => import('@/views/Api.vue'),
+      },
+      {
         path: '/settings',
         name: 'pages.settings',
         component: () => import('@/views/Settings.vue'),

@@ -49,6 +49,7 @@ export default {
     basics: "ترازها",
     dns: "DNS",
     admins: "ادمین‌ها",
+    api: "API",
     settings: "پیکربندی",
   },
   main: {

@@ -111,10 +111,15 @@ func (s *UserService) LoadTokens() ([]byte, error) {
 	}
 	var result []map[string]interface{}
 	for _, t := range tokens {
+		username := ""
+		if t.User != nil {
+			username = t.User.Username
+		}
 		result = append(result, map[string]interface{}{
 			"token":    t.Token,
 			"expiry":   t.Expiry,
-			"username": t.User.Username,
+			"username": username,
+			"desc":     t.Desc,
 		})
 	}
 	jsonResult, _ := json.MarshalIndent(result, "", "  ")

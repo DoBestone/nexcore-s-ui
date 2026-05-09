@@ -26,6 +26,7 @@ type ApiService struct {
 	service.PanelService
 	service.StatsService
 	service.ServerService
+	service.CloudflareService
 }
 
 func (a *ApiService) LoadData(c *gin.Context) {
@@ -383,6 +384,153 @@ func (a *ApiService) DeleteToken(c *gin.Context) {
 	tokenId := c.Request.FormValue("id")
 	err := a.UserService.DeleteToken(tokenId)
 	jsonMsg(c, "", err)
+}
+
+// addTokenForUser - v2 入口:用调用方持有的 token 推断出 username,而不是 session。
+// 表单字段同 v1 (expiry / desc),返回新 token 字符串。
+func (a *ApiService) addTokenForUser(c *gin.Context, username string) {
+	if username == "" {
+		jsonMsg(c, "", errEmpty("username"))
+		return
+	}
+	expiry := c.Request.FormValue("expiry")
+	expiryInt, err := strconv.ParseInt(expiry, 10, 64)
+	if err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	desc := c.Request.FormValue("desc")
+	token, err := a.UserService.AddToken(username, expiryInt, desc)
+	jsonObj(c, token, err)
+}
+
+func (a *ApiService) getTokensForUser(c *gin.Context, username string) {
+	if username == "" {
+		jsonMsg(c, "", errEmpty("username"))
+		return
+	}
+	tokens, err := a.UserService.GetUserTokens(username)
+	jsonObj(c, tokens, err)
+}
+
+// UpdateSettingsAPI - v2 入口:与 v1 的 setting CLI / sui setting 等价的写接口。
+// 接受 form 字段 port / path / subPort / subPath / listen / domain / subListen / subDomain。
+// 这里只覆盖最常用的几个,够脚本化部署用;前端继续走 save 走 ConfigService.Save 改 settings 表。
+func (a *ApiService) UpdateSettingsAPI(c *gin.Context) {
+	type req struct {
+		Port      *int    `json:"port" form:"port"`
+		Path      *string `json:"path" form:"path"`
+		SubPort   *int    `json:"subPort" form:"subPort"`
+		SubPath   *string `json:"subPath" form:"subPath"`
+	}
+	var r req
+	_ = c.ShouldBind(&r)
+
+	if r.Port != nil && *r.Port > 0 {
+		if err := a.SettingService.SetPort(*r.Port); err != nil {
+			jsonMsg(c, "setting", err)
+			return
+		}
+	}
+	if r.Path != nil && *r.Path != "" {
+		if err := a.SettingService.SetWebPath(*r.Path); err != nil {
+			jsonMsg(c, "setting", err)
+			return
+		}
+	}
+	if r.SubPort != nil && *r.SubPort > 0 {
+		if err := a.SettingService.SetSubPort(*r.SubPort); err != nil {
+			jsonMsg(c, "setting", err)
+			return
+		}
+	}
+	if r.SubPath != nil && *r.SubPath != "" {
+		if err := a.SettingService.SetSubPath(*r.SubPath); err != nil {
+			jsonMsg(c, "setting", err)
+			return
+		}
+	}
+	jsonMsg(c, "setting", nil)
+}
+
+func errEmpty(field string) error {
+	type emptyErr struct{ s string }
+	return &simpleErr{msg: field + " can not be empty"}
+}
+
+type simpleErr struct{ msg string }
+
+func (e *simpleErr) Error() string { return e.msg }
+
+// ---------- Cloudflare ----------
+
+func (a *ApiService) CFListZones(c *gin.Context) {
+	token := c.Request.FormValue("token")
+	if token == "" {
+		token = c.Query("token")
+	}
+	if err := a.CloudflareService.VerifyToken(token); err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	zones, err := a.CloudflareService.ListZones(token)
+	jsonObj(c, zones, err)
+}
+
+func (a *ApiService) CFUpsertA(c *gin.Context) {
+	type req struct {
+		Token   string `form:"token" json:"token"`
+		ZoneId  string `form:"zoneId" json:"zoneId"`
+		Name    string `form:"name" json:"name"`
+		Random  bool   `form:"random" json:"random"`
+		Prefix  string `form:"prefix" json:"prefix"`
+		IP      string `form:"ip" json:"ip"`
+		Proxied bool   `form:"proxied" json:"proxied"`
+	}
+	var r req
+	if err := c.ShouldBind(&r); err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	if r.Token == "" || r.ZoneId == "" || r.IP == "" {
+		jsonMsg(c, "", errEmpty("token / zoneId / ip"))
+		return
+	}
+	subname := r.Name
+	if r.Random {
+		subname = a.CloudflareService.RandomSubdomain(r.Prefix)
+	}
+	fqdn, recId, err := a.CloudflareService.UpsertARecord(r.Token, r.ZoneId, subname, r.IP, r.Proxied)
+	if err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	jsonObj(c, gin.H{"fqdn": fqdn, "recordId": recId}, nil)
+}
+
+func (a *ApiService) CFIssueTLS(c *gin.Context) {
+	type req struct {
+		Name    string `form:"name" json:"name"`
+		Fqdn    string `form:"fqdn" json:"fqdn"`
+		Email   string `form:"email" json:"email"`
+		Token   string `form:"token" json:"token"`
+		DataDir string `form:"dataDir" json:"dataDir"`
+	}
+	var r req
+	if err := c.ShouldBind(&r); err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	if r.Fqdn == "" || r.Email == "" || r.Token == "" {
+		jsonMsg(c, "", errEmpty("fqdn / email / token"))
+		return
+	}
+	id, err := a.CloudflareService.IssueTLS(r.Name, r.Fqdn, r.Email, r.Token, r.DataDir)
+	if err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	jsonObj(c, gin.H{"id": id, "fqdn": r.Fqdn}, nil)
 }
 
 func (a *ApiService) GetSingboxConfig(c *gin.Context) {

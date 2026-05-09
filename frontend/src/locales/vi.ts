@@ -49,6 +49,7 @@ export default {
     basics: "Cơ bản",
     dns: "DNS",
     admins: "Quản trị viên",
+    api: "API",
     settings: "Cài đặt",
   },
   main: {
