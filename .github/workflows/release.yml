@@ -204,5 +204,7 @@ jobs:
           tag: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
           file: nexcore-s-ui-linux-${{ matrix.platform }}.tar.gz
           asset_name: nexcore-s-ui-linux-${{ matrix.platform }}.tar.gz
-          prerelease: true
+          # prerelease=false 让 /releases/latest API 把它认作正式版,
+          # install.sh / update.sh 的 fallback 路径才能拿到 tag。
+          prerelease: false
           overwrite: true

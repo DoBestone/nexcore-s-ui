@@ -64,11 +64,13 @@ esac
 TARGET="${1:-}"
 if [[ -z "${TARGET}" ]]; then
     echo -e "${green}查询最新版本…${plain}"
-    TARGET=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases/latest" \
-        | grep -E '"tag_name":' \
+    # /releases?per_page=1 取最新条目(包含 prerelease);/releases/latest 会跳过
+    # prerelease,不适合本仓库默认发布策略。
+    TARGET=$(curl -fsSL "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/releases?per_page=1" \
+        | grep -m1 -E '"tag_name":' \
         | sed -E 's/.*"([^"]+)".*/\1/' || true)
     if [[ -z "${TARGET}" ]]; then
-        echo -e "${red}无法获取最新版本(GitHub API 限流?或仓库尚无 release — 试 GH_OWNER=alireza0 GH_REPO=s-ui)${plain}" >&2
+        echo -e "${red}无法获取最新版本(GitHub API 限流?或仓库尚无 release)${plain}" >&2
         exit 1
     fi
 fi

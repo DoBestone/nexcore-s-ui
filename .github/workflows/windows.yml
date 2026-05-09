@@ -139,5 +139,5 @@ jobs:
           tag: ${{ github.ref }}
           file: nexcore-s-ui-windows-${{ matrix.arch }}.zip
           asset_name: nexcore-s-ui-windows-${{ matrix.arch }}.zip
-          prerelease: true
+          prerelease: false
           overwrite: true
