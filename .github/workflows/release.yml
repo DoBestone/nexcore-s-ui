@@ -24,6 +24,12 @@ env:
   CRONET_GO_REPO: https://github.com/sagernet/cronet-go.git
   BOOTLIN_BASE_URL: https://toolchains.bootlin.com/downloads/releases/toolchains
 
+# svenstaro/upload-release-action 需要 contents:write 才能 create / overwrite
+# release;默认 GITHUB_TOKEN 是只读权限,不显式授权就会在 push tag 触发的
+# Upload to Release 步骤报 "Not Found - releases#get-a-release-by-tag-name"。
+permissions:
+  contents: write
+
 jobs:
   build-frontend:
     runs-on: ubuntu-latest
