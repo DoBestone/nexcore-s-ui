@@ -104,8 +104,6 @@ func (a *APIv2Handler) postHandler(c *gin.Context) {
 		a.ApiService.RestartSb(c)
 	case "linkConvert":
 		a.ApiService.LinkConvert(c)
-	case "subConvert":
-		a.ApiService.SubConvert(c)
 	case "importdb":
 		a.ApiService.ImportDb(c)
 	// v1 等价补齐 - 让外部 SDK 用 Token 也能做面板上能做的所有事。
@@ -117,6 +115,10 @@ func (a *APIv2Handler) postHandler(c *gin.Context) {
 		_ = apiv1.Reload()
 	case "deleteToken":
 		a.ApiService.DeleteToken(c)
+		a.ReloadTokens()
+		_ = apiv1.Reload()
+	case "resetToken":
+		a.ApiService.ResetToken(c)
 		a.ReloadTokens()
 		_ = apiv1.Reload()
 	case "setting":
@@ -141,7 +143,7 @@ func (a *APIv2Handler) getHandler(c *gin.Context) {
 	switch action {
 	case "load":
 		a.ApiService.LoadData(c)
-	case "inbounds", "outbounds", "endpoints", "services", "tls", "clients", "config":
+	case "inbounds", "outbounds", "endpoints", "tls", "clients", "config":
 		err := a.ApiService.LoadPartialData(c, []string{action})
 		if err != nil {
 			jsonMsg(c, action, err)

@@ -22,7 +22,11 @@
     <div class="nc-header__actions">
       <el-dropdown trigger="click" @command="changeLocale">
         <button class="nc-header__icon-btn" :aria-label="$t('language', '语言')">
-          <el-icon><LocationInformation /></el-icon>
+          <el-icon>
+            <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path fill="currentColor" d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm322.5 384h-138a583 583 0 0 0-50-186 354 354 0 0 1 188 186zM512 144c46.5 0 102.6 76 130.6 192H381.4c28-116 84.1-192 130.6-192zM189.5 448a354 354 0 0 1 188-186 583 583 0 0 0-50 186h-138zm0 128h138c8 67.5 25.4 130.7 50 186a354 354 0 0 1-188-186zM512 880c-46.5 0-102.6-76-130.6-192h261.2c-28 116-84.1 192-130.6 192zm-148-256a503 503 0 0 1 0-224h296a503 503 0 0 1 0 224H364zm282.5 64a583 583 0 0 0 50-186h138a354 354 0 0 1-188 186z"/>
+            </svg>
+          </el-icon>
         </button>
         <template #dropdown>
           <el-dropdown-menu>
@@ -67,7 +71,6 @@ import {
   Sunny,
   Moon,
   Monitor,
-  LocationInformation,
 } from '@element-plus/icons-vue'
 import { markRaw } from 'vue'
 

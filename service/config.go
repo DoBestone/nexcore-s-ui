@@ -28,8 +28,23 @@ type ConfigService struct {
 	SettingService
 	InboundService
 	OutboundService
-	ServicesService
 	EndpointService
+}
+
+// ensureBuiltinOutbounds 保证最终 config 至少包含 tag=direct 出站。
+// rule-set 默认 `download_detour: "direct"`、DNS 把 geoip-cn / 私网回 direct,
+// 一旦用户把 direct 删了或空 DB 状态,sing-box 启动直接报
+// "download detour not found: direct"。缺则在末尾补一个最简 direct。
+//
+// 不自动注 block —— 新版 sing-box 已废弃 block outbound 类型,改用路由 action=reject。
+func ensureBuiltinOutbounds(outbounds []json.RawMessage) []json.RawMessage {
+	for _, o := range outbounds {
+		var meta struct{ Tag string }
+		if err := json.Unmarshal(o, &meta); err == nil && meta.Tag == "direct" {
+			return outbounds
+		}
+	}
+	return append(outbounds, json.RawMessage(`{"type":"direct","tag":"direct"}`))
 }
 
 type SingBoxConfig struct {
@@ -38,7 +53,6 @@ type SingBoxConfig struct {
 	Ntp          json.RawMessage   `json:"ntp"`
 	Inbounds     []json.RawMessage `json:"inbounds"`
 	Outbounds    []json.RawMessage `json:"outbounds"`
-	Services     []json.RawMessage `json:"services"`
 	Endpoints    []json.RawMessage `json:"endpoints"`
 	Route        json.RawMessage   `json:"route"`
 	Experimental json.RawMessage   `json:"experimental"`
@@ -71,10 +85,12 @@ func (s *ConfigService) GetConfig(data string) (*[]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	singboxConfig.Services, err = s.ServicesService.GetAllConfig(database.GetDB())
-	if err != nil {
-		return nil, err
-	}
+	// 兜底:必须存在 `direct` 出站。
+	// rule-set 默认 `download_detour: "direct"`,DNS 默认规则也会把私网 / geoip-cn
+	// 路由到 direct;一旦用户把 direct 出站删了或从未建过(空 DB 状态),
+	// sing-box 启动会立刻挂在 "download detour not found: direct"。
+	// 这里在生成最终 config 时强制保证 direct/block 两个出站存在,缺则补。
+	singboxConfig.Outbounds = ensureBuiltinOutbounds(singboxConfig.Outbounds)
 	singboxConfig.Endpoints, err = s.EndpointService.GetAllConfig(database.GetDB())
 	if err != nil {
 		return nil, err
@@ -224,8 +240,6 @@ func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initU
 		objs = append(objs, "clients")
 	case "outbounds":
 		err = s.OutboundService.Save(tx, act, data)
-	case "services":
-		err = s.ServicesService.Save(tx, act, data)
 	case "endpoints":
 		err = s.EndpointService.Save(tx, act, data)
 	case "config":

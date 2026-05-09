@@ -113,6 +113,7 @@ const onLogin = async () => {
     try {
       const resp = await HttpUtil.post('api/login', { user: form.username, pass: form.password })
       if (resp.success) {
+        localStorage.setItem('admin_username', form.username)
         setTimeout(() => router.push('/'), 350)
       }
     } finally {

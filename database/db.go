@@ -95,7 +95,6 @@ func InitDB(dbPath string) error {
 		&model.Tls{},
 		&model.Inbound{},
 		&model.Outbound{},
-		&model.Service{},
 		&model.Endpoint{},
 		&model.User{},
 		&model.Tokens{},
@@ -107,6 +106,9 @@ func InitDB(dbPath string) error {
 	if err != nil {
 		return err
 	}
+	// 老数据库新加的 inbounds.enable 列对历史行可能落到 NULL;
+	// 显式回填一次,确保升级后所有现存入站默认是启用状态。
+	db.Exec("UPDATE inbounds SET enable = 1 WHERE enable IS NULL")
 	err = initUser()
 	if err != nil {
 		return err

@@ -108,7 +108,7 @@ const loadData = async () => {
   })
   if (data.success && data.obj) {
     const obj = <any[]>data.obj
-    const l = String(i18n.global.locale.value) === 'fa' ? 'fa-IR' : 'en-US'
+    const l = String(i18n.global.locale.value) === 'zhHans' ? 'zh-CN' : 'en-US'
     const oneStep = (limit.value * 3600 * 1000) / 360
     const now = new Date().getTime()
     const steps: number[] = []

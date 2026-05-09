@@ -52,8 +52,6 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 		a.ApiService.RestartSb(c)
 	case "linkConvert":
 		a.ApiService.LinkConvert(c)
-	case "subConvert":
-		a.ApiService.SubConvert(c)
 	case "importdb":
 		a.ApiService.ImportDb(c)
 	case "addToken":
@@ -64,6 +62,14 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 		a.ApiService.DeleteToken(c)
 		a.apiv2.ReloadTokens()
 		_ = apiv1.Reload()
+	case "resetToken":
+		a.ApiService.ResetToken(c)
+		a.apiv2.ReloadTokens()
+		_ = apiv1.Reload()
+	case "resetTraffic":
+		a.ApiService.ResetTraffic(c)
+	case "cfSetCredentials":
+		a.ApiService.SetCfCredentials(c)
 	case "setting":
 		a.ApiService.UpdateSettingsAPI(c)
 	case "clearApiLogs":
@@ -88,7 +94,7 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.Logout(c)
 	case "load":
 		a.ApiService.LoadData(c)
-	case "inbounds", "outbounds", "endpoints", "services", "tls", "clients", "config":
+	case "inbounds", "outbounds", "endpoints", "tls", "clients", "config":
 		err := a.ApiService.LoadPartialData(c, []string{action})
 		if err != nil {
 			jsonMsg(c, action, err)
@@ -114,6 +120,12 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.GetDb(c)
 	case "tokens":
 		a.ApiService.GetTokens(c)
+	case "firewallStatus":
+		a.ApiService.GetFirewallStatus(c)
+	case "cfCredentials":
+		a.ApiService.GetCfCredentials(c)
+	case "statsTotals":
+		a.ApiService.GetStatsTotals(c)
 	case "singbox-config":
 		a.ApiService.GetSingboxConfig(c)
 	case "checkOutbound":

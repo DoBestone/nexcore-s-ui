@@ -18,23 +18,9 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
-import 'dayjs/locale/zh-tw'
-import 'dayjs/locale/fa'
-import 'dayjs/locale/ru'
-import 'dayjs/locale/vi'
-
-const dayjsLocaleMap: Record<string, string> = {
-  en: 'en',
-  zhHans: 'zh-cn',
-  zhHant: 'zh-tw',
-  fa: 'fa',
-  ru: 'ru',
-  vi: 'vi',
-}
 
 export function applyEPLocale(lang: string) {
-  const dl = dayjsLocaleMap[lang] || 'en'
-  dayjs.locale(dl)
+  dayjs.locale(lang === 'zhHans' ? 'zh-cn' : 'en')
 }
 
 export default {

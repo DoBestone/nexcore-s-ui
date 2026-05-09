@@ -9,13 +9,11 @@ const Data = defineStore('Data', {
   state: () => ({
     lastLoad: 0,
     reloadItems: localStorage.getItem('reloadItems')?.split(',') ?? <string[]>[],
-    subURI: '',
     enableTraffic: false,
     onlines: { inbound: <string[]>[], outbound: <string[]>[], user: <string[]>[] },
     config: <any>{},
     inbounds: <any[]>[],
     outbounds: <any[]>[],
-    services: <any[]>[],
     endpoints: <any[]>[],
     clients: <any>[],
     tlsConfigs: <any[]>[],
@@ -26,12 +24,26 @@ const Data = defineStore('Data', {
       if (msg.success) {
         this.onlines = msg.obj.onlines
         if (msg.obj.lastLog) {
-          ElMessage({
-            type: 'error',
-            duration: 5000,
-            message: `${i18n.global.t('error.core')}: ${msg.obj.lastLog}`,
-            showClose: true,
-          })
+          // 后端把每行 sing-box stderr 都当成 lastLog 推过来,但实际包含 INFO/WARN/ERROR 多种级别。
+          // 只对 ERROR/FATAL 级别弹错;WARN 弹警告;INFO(如 cooldown 倒计时)直接静默,避免每 15 秒一次红框骚扰。
+          const log = String(msg.obj.lastLog)
+          const isError = / ERROR | FATAL |panic:/i.test(log)
+          const isWarn = / WARN /i.test(log)
+          if (isError) {
+            ElMessage({
+              type: 'error',
+              duration: 5000,
+              message: `${i18n.global.t('error.core')}: ${log}`,
+              showClose: true,
+            })
+          } else if (isWarn) {
+            ElMessage({
+              type: 'warning',
+              duration: 4000,
+              message: log,
+              showClose: true,
+            })
+          }
         }
 
         if (msg.obj.config) {
@@ -41,13 +53,11 @@ const Data = defineStore('Data', {
     },
     setNewData(data: any) {
       this.lastLoad = Math.floor((new Date()).getTime() / 1000)
-      if (data.subURI) this.subURI = data.subURI
       if (data.enableTraffic) this.enableTraffic = data.enableTraffic
       if (data.config) this.config = data.config
       if (Object.hasOwn(data, 'clients')) this.clients = data.clients ?? []
       if (Object.hasOwn(data, 'inbounds')) this.inbounds = data.inbounds ?? []
       if (Object.hasOwn(data, 'outbounds')) this.outbounds = data.outbounds ?? []
-      if (Object.hasOwn(data, 'services')) this.services = data.services ?? []
       if (Object.hasOwn(data, 'endpoints')) this.endpoints = data.endpoints ?? []
       if (Object.hasOwn(data, 'tls')) this.tlsConfigs = data.tls ?? []
     },
@@ -115,9 +125,6 @@ const Data = defineStore('Data', {
           break
         case 'outbound':
           objects = this.outbounds
-          break
-        case 'service':
-          objects = this.services
           break
         case 'endpoint':
           objects = this.endpoints

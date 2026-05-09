@@ -164,3 +164,16 @@ func (s *UserService) DeleteToken(id string) error {
 	db := database.GetDB()
 	return db.Model(model.Tokens{}).Where("id = ?", id).Delete(&model.Tokens{}).Error
 }
+
+func (s *UserService) ResetToken(id string) (string, error) {
+	db := database.GetDB()
+	t := &model.Tokens{}
+	if err := db.Model(model.Tokens{}).Where("id = ?", id).First(t).Error; err != nil {
+		return "", err
+	}
+	t.Token = common.Random(32)
+	if err := db.Save(t).Error; err != nil {
+		return "", err
+	}
+	return t.Token, nil
+}

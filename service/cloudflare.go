@@ -32,6 +32,19 @@ type cfResp struct {
 	Result  json.RawMessage   `json:"result"`
 }
 
+// sanitizeToken 把用户从 CF Dashboard 复制粘贴时常见的脏字符洗掉,避免
+// HTTP header 带换行 / 引号触发 CF 6111 "Invalid format for Authorization header"。
+// 涵盖:首尾空白(含换行)、首尾的英文/中文引号、整体被 `Bearer ` 前缀包裹的情况。
+func sanitizeToken(token string) string {
+	t := strings.TrimSpace(token)
+	// 用户有时直接复制 CF 文档里的 `Bearer XXXXX` 整段
+	t = strings.TrimPrefix(t, "Bearer ")
+	t = strings.TrimPrefix(t, "bearer ")
+	// 去掉成对引号
+	t = strings.Trim(t, `"'` + "“”‘’")
+	return strings.TrimSpace(t)
+}
+
 // httpJSON 不是 best-of-class 客户端,但够用 - CF API 老老实实的 JSON,无 cursor/pagination 复杂度。
 // token 可以是 Global API Key + email(老式)或 API Token(推荐),这里只支持 Bearer Token。
 func (s *CloudflareService) httpJSON(method, path, token string, body interface{}) (*cfResp, error) {
@@ -47,7 +60,11 @@ func (s *CloudflareService) httpJSON(method, path, token string, body interface{
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	clean := sanitizeToken(token)
+	if clean == "" {
+		return nil, common.NewError("cloudflare token is empty after sanitize — 检查粘贴是否完整")
+	}
+	req.Header.Set("Authorization", "Bearer "+clean)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -66,7 +83,22 @@ func (s *CloudflareService) httpJSON(method, path, token string, body interface{
 		return nil, common.NewError("cloudflare API non-JSON (HTTP ", res.StatusCode, "): ", string(raw))
 	}
 	if !r.Success {
-		return &r, common.NewError("cloudflare API failed: ", string(raw))
+		// 把常见的 CF 错误码翻译成用户能看懂的中文,原始 JSON 收口到 debug 文本里。
+		// 6003/6111: Authorization header 格式问题(典型:粘贴带空格/引号)
+		// 9109 / 9106: 无权访问该 zone(token 未授予该 zone 权限)
+		// 7003: 路径不存在 / zone id 不存在
+		// 1001: token 已禁用 / 已撤销
+		errStr := string(raw)
+		if strings.Contains(errStr, `"code":6003`) || strings.Contains(errStr, `"code":6111`) {
+			return &r, common.NewError("Cloudflare 拒绝认证(6003/6111):API Token 格式不对。请重新到 https://dash.cloudflare.com/profile/api-tokens 复制完整 Token,粘贴时不要带空格 / 引号 / 换行")
+		}
+		if strings.Contains(errStr, `"code":1001`) || strings.Contains(errStr, `"code":1000`) {
+			return &r, common.NewError("Cloudflare API Token 无效或已撤销(1000/1001),请去 dashboard 重新生成")
+		}
+		if strings.Contains(errStr, `"code":9109`) || strings.Contains(errStr, `"code":9106`) {
+			return &r, common.NewError("Cloudflare API Token 没有此 zone 的权限(9106/9109),请在 token 编辑页加上 Zone:Read + Zone:DNS:Edit + Zone Resources 选中目标域名")
+		}
+		return &r, common.NewError("cloudflare API failed: ", errStr)
 	}
 	return &r, nil
 }

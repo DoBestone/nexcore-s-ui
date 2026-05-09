@@ -40,7 +40,7 @@ import { HumanReadable } from '@/plugins/utils'
 import { i18n } from '@/locales'
 import { markRaw } from 'vue'
 import {
-  Refresh, User, Download, Upload, Operation, PriceTag, DataAnalysis, MagicStick,
+  Refresh, User, Download, Upload, PriceTag, DataAnalysis, MagicStick,
 } from '@element-plus/icons-vue'
 
 const props = defineProps<{ visible: boolean }>()
@@ -48,7 +48,7 @@ defineEmits<{ 'update:visible': [v: boolean] }>()
 
 const loading = ref(false)
 const info = ref<{
-  clients?: number; inbounds?: number; outbounds?: number; services?: number; endpoints?: number
+  clients?: number; inbounds?: number; outbounds?: number; endpoints?: number
   clientUp?: number; clientDown?: number
 }>({})
 
@@ -62,7 +62,6 @@ const tableRows = computed(() => {
     { key: 'clients',   icon: markRaw(User),         label: t('pages.clients'),   value: info.value.clients ?? 0,   color: 'var(--nc-text-muted)' },
     { key: 'inbounds',  icon: markRaw(Download),     label: t('pages.inbounds'),  value: info.value.inbounds ?? 0,  color: 'var(--nc-text-muted)' },
     { key: 'outbounds', icon: markRaw(Upload),       label: t('pages.outbounds'), value: info.value.outbounds ?? 0, color: 'var(--nc-text-muted)' },
-    { key: 'services',  icon: markRaw(Operation),    label: t('pages.services'),  value: info.value.services ?? 0,  color: 'var(--nc-text-muted)' },
     { key: 'endpoints', icon: markRaw(PriceTag),     label: t('pages.endpoints'), value: info.value.endpoints ?? 0, color: 'var(--nc-text-muted)' },
     { key: 'clientUp',  icon: markRaw(Upload),       label: t('stats.upload'),    value: clientUp.value,            color: 'var(--nc-warning)' },
     { key: 'clientDown',icon: markRaw(Download),     label: t('stats.download'),  value: clientDown.value,          color: 'var(--nc-success)' },

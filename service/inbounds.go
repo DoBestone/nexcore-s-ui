@@ -59,6 +59,7 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 			"type":   inbound.Type,
 			"tag":    inbound.Tag,
 			"tls_id": inbound.TlsId,
+			"enable": inbound.Enable,
 		}
 		if inbound.Options != nil {
 			var restFields map[string]json.RawMessage
@@ -126,29 +127,33 @@ func (s *InboundService) Save(tx *gorm.DB, act string, data json.RawMessage, ini
 
 		if corePtr.IsRunning() {
 			if act == "edit" {
+				// 编辑必须先把旧的 tag 摘掉(不论新状态是 enable 还是 disable),
+				// 否则 sing-box 会保留两份监听冲突。Disable 的情况摘完就停。
 				err = corePtr.RemoveInbound(oldTag)
 				if err != nil && err != os.ErrInvalid {
 					return err
 				}
 			}
 
-			inboundConfig, err := inbound.MarshalJSON()
-			if err != nil {
-				return err
-			}
+			if inbound.Enable {
+				inboundConfig, err := inbound.MarshalJSON()
+				if err != nil {
+					return err
+				}
 
-			if act == "edit" {
-				inboundConfig, err = s.addUsers(tx, inboundConfig, inbound.Id, inbound.Type)
-			} else {
-				inboundConfig, err = s.initUsers(tx, inboundConfig, initUserIds, inbound.Type)
-			}
-			if err != nil {
-				return err
-			}
+				if act == "edit" {
+					inboundConfig, err = s.addUsers(tx, inboundConfig, inbound.Id, inbound.Type)
+				} else {
+					inboundConfig, err = s.initUsers(tx, inboundConfig, initUserIds, inbound.Type)
+				}
+				if err != nil {
+					return err
+				}
 
-			err = corePtr.AddInbound(inboundConfig)
-			if err != nil {
-				return err
+				err = corePtr.AddInbound(inboundConfig)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -224,7 +229,8 @@ func (s *InboundService) UpdateOutJsons(tx *gorm.DB, inboundIds []uint, hostname
 func (s *InboundService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 	var inboundsJson []json.RawMessage
 	var inbounds []*model.Inbound
-	err := db.Model(model.Inbound{}).Preload("Tls").Find(&inbounds).Error
+	// 仅下发启用的入站。enable 字段在 model.Inbound 上,由 UI 的 Switch 写入。
+	err := db.Model(model.Inbound{}).Preload("Tls").Where("enable = ?", true).Find(&inbounds).Error
 	if err != nil {
 		return nil, err
 	}

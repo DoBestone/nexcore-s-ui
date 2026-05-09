@@ -42,7 +42,6 @@ type Controller struct {
 	inboundSvc  service.InboundService
 	outboundSvc service.OutboundService
 	endpointSvc service.EndpointService
-	servicesSvc service.ServicesService
 	statsSvc    service.StatsService
 	serverSvc   service.ServerService
 	cfSvc       service.CloudflareService
@@ -96,10 +95,9 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	authed.PUT("/outbounds/:id", a.updateOutbound)
 	authed.DELETE("/outbounds/:id", a.deleteOutbound)
 
-	// endpoints / services / tls / clients — REST CRUD
+	// endpoints / tls / clients — REST CRUD
 	authed.GET("/endpoints", a.listEndpoints)
 	authed.GET("/endpoints/:id", a.getEndpoint)
-	authed.GET("/services", a.listServices)
 	authed.GET("/tls", a.listTls)
 	authed.GET("/clients", a.listClients)
 	authed.GET("/clients/:identifier", a.getClient)
@@ -142,8 +140,6 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	sui.POST("/cloudflare/tls/issue", a.cfIssueTLS)
 	// sing-box 完整运行时配置(getSingboxConfig 等价)
 	sui.GET("/singbox/raw-config", a.suiSingboxRaw)
-	// 订阅 URI(单 client 链接列表)
-	sui.GET("/subscription-uri", a.suiSubURI)
 }
 
 // ---------- handlers: status & health ----------
@@ -321,15 +317,6 @@ func (a *Controller) getEndpoint(c *gin.Context) {
 		return
 	}
 	pickById(c, "endpoint_not_found", c.Param("id"), derefMaps(items))
-}
-
-func (a *Controller) listServices(c *gin.Context) {
-	items, err := a.servicesSvc.GetAll()
-	if err != nil {
-		Internal(c, "db_error", err)
-		return
-	}
-	OK(c, derefMaps(items))
 }
 
 func (a *Controller) listTls(c *gin.Context) {
@@ -529,13 +516,11 @@ func (a *Controller) getSettings(c *gin.Context) {
 }
 
 // patchSettings 接受 partial JSON,只设置非空字段。与 x-ui 同语义。
-// 字段:port / path / subPort / subPath。
+// 字段:port / path。
 func (a *Controller) patchSettings(c *gin.Context) {
 	type body struct {
-		Port    *int    `json:"port"`
-		Path    *string `json:"path"`
-		SubPort *int    `json:"subPort"`
-		SubPath *string `json:"subPath"`
+		Port *int    `json:"port"`
+		Path *string `json:"path"`
 	}
 	var b body
 	if err := c.ShouldBindJSON(&b); err != nil {
@@ -550,18 +535,6 @@ func (a *Controller) patchSettings(c *gin.Context) {
 	}
 	if b.Path != nil && *b.Path != "" {
 		if err := a.settingSvc.SetWebPath(*b.Path); err != nil {
-			BadRequest(c, "update_failed", err.Error())
-			return
-		}
-	}
-	if b.SubPort != nil && *b.SubPort > 0 {
-		if err := a.settingSvc.SetSubPort(*b.SubPort); err != nil {
-			BadRequest(c, "update_failed", err.Error())
-			return
-		}
-	}
-	if b.SubPath != nil && *b.SubPath != "" {
-		if err := a.settingSvc.SetSubPath(*b.SubPath); err != nil {
 			BadRequest(c, "update_failed", err.Error())
 			return
 		}
@@ -753,19 +726,6 @@ func (a *Controller) suiSingboxRaw(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	c.Header("Content-Disposition", "attachment; filename=singbox-config.json")
 	c.Data(200, "application/json", *raw)
-}
-
-func (a *Controller) suiSubURI(c *gin.Context) {
-	host := c.Query("host")
-	if host == "" {
-		host = c.Request.Host
-	}
-	uri, err := a.settingSvc.GetFinalSubURI(host)
-	if err != nil {
-		Internal(c, "config_read_failed", err)
-		return
-	}
-	OK(c, gin.H{"subURI": uri})
 }
 
 // ---------- helpers ----------

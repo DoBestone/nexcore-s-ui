@@ -51,16 +51,12 @@ import { logout } from '@/plugins/httputil'
 import {
   House,
   Download,
-  User,
   Upload,
   PriceTag,
-  Operation,
   Lock,
   Setting,
   Connection,
   Promotion,
-  Avatar,
-  Tools,
   Cpu,
   Close,
   SwitchButton,
@@ -81,15 +77,11 @@ const route = useRoute()
 const menu = [
   { title: 'pages.home',      icon: markRaw(House),       path: '/' },
   { title: 'pages.inbounds',  icon: markRaw(Download),    path: '/inbounds' },
-  { title: 'pages.clients',   icon: markRaw(User),        path: '/clients' },
   { title: 'pages.outbounds', icon: markRaw(Upload),      path: '/outbounds' },
   { title: 'pages.endpoints', icon: markRaw(PriceTag),    path: '/endpoints' },
-  { title: 'pages.services',  icon: markRaw(Operation),   path: '/services' },
   { title: 'pages.tls',       icon: markRaw(Lock),        path: '/tls' },
-  { title: 'pages.basics',    icon: markRaw(Tools),       path: '/basics' },
   { title: 'pages.rules',     icon: markRaw(Connection),  path: '/rules' },
   { title: 'pages.dns',       icon: markRaw(Promotion),   path: '/dns' },
-  { title: 'pages.admins',    icon: markRaw(Avatar),      path: '/admins' },
   { title: 'pages.api',       icon: markRaw(Cpu),         path: '/api' },
   { title: 'pages.settings',  icon: markRaw(Setting),     path: '/settings' },
 ]
@@ -182,6 +174,7 @@ const onLogout = () => {
 .nc-aside__nav {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px 10px;
   display: flex;
   flex-direction: column;

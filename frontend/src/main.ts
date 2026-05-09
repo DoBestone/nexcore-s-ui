@@ -41,14 +41,13 @@ app
   .use(i18n)
   .mount('#app')
 
-// 路由切换:同步 body 上的语言 class、document.title、RTL 方向
+// 路由切换:同步 body 上的语言 class 与 document.title
 router.afterEach((to) => {
   const cur = i18n.global.locale.value
   document.body.classList.forEach((c) => {
     if (c.startsWith('app-') && c !== 'app-admin') document.body.classList.remove(c)
   })
   document.body.classList.add(`app-${cur}`)
-  document.documentElement.dir = cur === 'fa' ? 'rtl' : 'ltr'
 
   if (typeof to.name === 'string') {
     const pageName = i18n.global.t(to.name)

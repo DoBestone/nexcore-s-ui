@@ -12,7 +12,6 @@ import (
 
 type TlsService struct {
 	InboundService
-	ServicesService
 }
 
 func (s *TlsService) GetAll() ([]model.Tls, error) {
@@ -64,17 +63,6 @@ func (s *TlsService) Save(tx *gorm.DB, action string, data json.RawMessage, host
 					return err
 				}
 			}
-			var serviceIds []uint
-			err = tx.Model(model.Service{}).Where("tls_id = ?", tls.Id).Scan(&serviceIds).Error
-			if err != nil {
-				return err
-			}
-			if len(serviceIds) > 0 {
-				err = s.ServicesService.RestartServices(tx, serviceIds)
-				if err != nil {
-					return err
-				}
-			}
 		}
 	case "del":
 		var id uint
@@ -87,12 +75,7 @@ func (s *TlsService) Save(tx *gorm.DB, action string, data json.RawMessage, host
 		if err != nil {
 			return err
 		}
-		var serviceCount int64
-		err = tx.Model(model.Service{}).Where("tls_id = ?", id).Count(&serviceCount).Error
-		if err != nil {
-			return err
-		}
-		if inboundCount > 0 || serviceCount > 0 {
+		if inboundCount > 0 {
 			return common.NewError("tls in use")
 		}
 		err = tx.Where("id = ?", id).Delete(model.Tls{}).Error

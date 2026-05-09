@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"runtime"
@@ -53,18 +54,6 @@ var defaultValueMap = map[string]string{
 	"sessionMaxAge": "0",
 	"trafficAge":    "30",
 	"timeLocation":  "UTC",
-	"subListen":     "",
-	"subPort":       "3096",
-	"subPath":       "/sub/",
-	"subDomain":     "",
-	"subCertFile":   "",
-	"subKeyFile":    "",
-	"subUpdates":    "12",
-	"subEncode":     "true",
-	"subShowInfo":   "false",
-	"subURI":        "",
-	"subJsonExt":    "",
-	"subClashExt":   "",
 	"config":        defaultConfig,
 	"version":       config.GetVersion(),
 }
@@ -99,8 +88,42 @@ func (s *SettingService) GetAllSetting() (*map[string]string, error) {
 	delete(allSetting, "secret")
 	delete(allSetting, "config")
 	delete(allSetting, "version")
+	// CF API Token 持久化但不在通用 settings 接口里下发到前端。
+	// 前端用专门的 GetCfToken / SetCfToken 端点存取,降低误传到日志/导出的风险。
+	delete(allSetting, "cf_api_token")
+	delete(allSetting, "cf_acme_email")
 
 	return &allSetting, nil
+}
+
+// GetCfToken / SetCfToken — Cloudflare API Token 持久化存储,供"自动签发"流程
+// 复用,免得用户每次都重新粘贴一次 token。token 存 base64 仅做一层混淆 —
+// 真正的安全是 DB 文件 owner-only 权限 + 面板登录鉴权。
+func (s *SettingService) GetCfToken() (token, email string) {
+	t, _ := s.getString("cf_api_token")
+	if decoded, err := base64.StdEncoding.DecodeString(t); err == nil {
+		t = string(decoded)
+	}
+	email, _ = s.getString("cf_acme_email")
+	return strings.TrimSpace(t), strings.TrimSpace(email)
+}
+
+func (s *SettingService) SetCfToken(token, email string) error {
+	enc := base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(token)))
+	if err := s.saveSetting("cf_api_token", enc); err != nil {
+		return err
+	}
+	if email != "" {
+		return s.saveSetting("cf_acme_email", strings.TrimSpace(email))
+	}
+	return nil
+}
+
+func (s *SettingService) ClearCfToken() error {
+	if err := s.saveSetting("cf_api_token", ""); err != nil {
+		return err
+	}
+	return s.saveSetting("cf_acme_email", "")
 }
 
 func (s *SettingService) ResetSettings() error {
@@ -259,93 +282,6 @@ func (s *SettingService) GetTimeLocation() (*time.Location, error) {
 	return location, nil
 }
 
-func (s *SettingService) GetSubListen() (string, error) {
-	return s.getString("subListen")
-}
-
-func (s *SettingService) GetSubPort() (int, error) {
-	return s.getInt("subPort")
-}
-
-func (s *SettingService) SetSubPort(subPort int) error {
-	return s.setInt("subPort", subPort)
-}
-
-func (s *SettingService) GetSubPath() (string, error) {
-	subPath, err := s.getString("subPath")
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(subPath, "/") {
-		subPath = "/" + subPath
-	}
-	if !strings.HasSuffix(subPath, "/") {
-		subPath += "/"
-	}
-	return subPath, nil
-}
-
-func (s *SettingService) SetSubPath(subPath string) error {
-	if !strings.HasPrefix(subPath, "/") {
-		subPath = "/" + subPath
-	}
-	if !strings.HasSuffix(subPath, "/") {
-		subPath += "/"
-	}
-	return s.setString("subPath", subPath)
-}
-
-func (s *SettingService) GetSubDomain() (string, error) {
-	return s.getString("subDomain")
-}
-
-func (s *SettingService) GetSubCertFile() (string, error) {
-	return s.getString("subCertFile")
-}
-
-func (s *SettingService) GetSubKeyFile() (string, error) {
-	return s.getString("subKeyFile")
-}
-
-func (s *SettingService) GetSubUpdates() (int, error) {
-	return s.getInt("subUpdates")
-}
-
-func (s *SettingService) GetSubEncode() (bool, error) {
-	return s.getBool("subEncode")
-}
-
-func (s *SettingService) GetSubShowInfo() (bool, error) {
-	return s.getBool("subShowInfo")
-}
-
-func (s *SettingService) GetSubURI() (string, error) {
-	return s.getString("subURI")
-}
-
-func (s *SettingService) GetFinalSubURI(host string) (string, error) {
-	allSetting, err := s.GetAllSetting()
-	if err != nil {
-		return "", err
-	}
-	SubURI := (*allSetting)["subURI"]
-	if SubURI != "" {
-		return SubURI, nil
-	}
-	protocol := "http"
-	if (*allSetting)["subKeyFile"] != "" && (*allSetting)["subCertFile"] != "" {
-		protocol = "https"
-	}
-	if (*allSetting)["subDomain"] != "" {
-		host = (*allSetting)["subDomain"]
-	}
-	port := ":" + (*allSetting)["subPort"]
-	if (port == "80" && protocol == "http") || (port == "443" && protocol == "https") {
-		port = ""
-	}
-	return protocol + "://" + host + port + (*allSetting)["subPath"], nil
-}
-
 func (s *SettingService) GetConfig() (string, error) {
 	return s.getString("config")
 }
@@ -372,9 +308,7 @@ func (s *SettingService) Save(tx *gorm.DB, data json.RawMessage) error {
 	for key, obj := range settings {
 		// Secure file existence check
 		if obj != "" && (key == "webCertFile" ||
-			key == "webKeyFile" ||
-			key == "subCertFile" ||
-			key == "subKeyFile") {
+			key == "webKeyFile") {
 			err = s.fileExists(obj)
 			if err != nil {
 				return common.NewError(" -> ", obj, " is not exists")
@@ -382,8 +316,7 @@ func (s *SettingService) Save(tx *gorm.DB, data json.RawMessage) error {
 		}
 
 		// Correct Pathes start and ends with `/`
-		if key == "webPath" ||
-			key == "subPath" {
+		if key == "webPath" {
 			if !strings.HasPrefix(obj, "/") {
 				obj = "/" + obj
 			}
@@ -405,14 +338,6 @@ func (s *SettingService) Save(tx *gorm.DB, data json.RawMessage) error {
 		}
 	}
 	return err
-}
-
-func (s *SettingService) GetSubJsonExt() (string, error) {
-	return s.getString("subJsonExt")
-}
-
-func (s *SettingService) GetSubClashExt() (string, error) {
-	return s.getString("subClashExt")
 }
 
 func (s *SettingService) fileExists(path string) error {

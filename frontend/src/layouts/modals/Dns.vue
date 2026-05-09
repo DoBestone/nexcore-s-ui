@@ -40,10 +40,9 @@ const props = defineProps<{
   index: number
   data: string
   tsTags: string[]
-  rslvdTags: string[]
 }>()
 const emit = defineEmits<{ close: []; save: [data: any]; 'update:modelValue': [v: boolean] }>()
-void props.tsTags; void props.rslvdTags
+void props.tsTags
 
 const server = ref<any>({ type: 'tcp', tag: '' })
 const title = ref<'add' | 'edit'>('add')

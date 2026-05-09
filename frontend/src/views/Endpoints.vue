@@ -3,18 +3,45 @@
     <div class="page-header with-actions">
       <div class="page-header-text">
         <h2 class="page-title">{{ $t('pages.endpoints') }}</h2>
-        <p class="page-desc">{{ $t('endpoints.desc', 'WireGuard / Tailscale / Warp 端点') }}</p>
+        <p class="page-desc">虚拟网卡端点 · 用于让落地机加入 Cloudflare Warp / Tailscale / 自建 WireGuard 网络（与「出站管理」不同 — 这里建的是网卡，不是简单转发）</p>
       </div>
       <div class="page-header-actions">
+        <el-button :loading="warpLoading" @click="quickRegisterWarp">
+          <el-icon v-if="!warpLoading"><MagicStick /></el-icon>一键 Warp
+        </el-button>
+        <el-button @click="addTailscaleTemplate">
+          <el-icon><Connection /></el-icon>一键 Tailscale
+        </el-button>
         <el-button type="primary" @click="showModal(0)">
           <el-icon><Plus /></el-icon>{{ $t('actions.add') }}
         </el-button>
       </div>
     </div>
 
-    <div v-if="endpoints.length === 0" class="empty-state nc-card">
-      <el-icon class="empty-state__icon"><Box /></el-icon>
-      <p class="empty-state__text">{{ $t('noData') }}</p>
+    <!-- 用途说明卡片（只在还没配端点时显示） -->
+    <div v-if="endpoints.length === 0" class="nc-card guide-card">
+      <h4 class="section-title">这个页面是干啥的</h4>
+      <div class="guide-grid">
+        <div class="guide-item">
+          <div class="guide-item__icon" style="background: #f6821f">⚡</div>
+          <div class="guide-item__title">解锁流媒体 / ChatGPT</div>
+          <div class="guide-item__desc">落地机 IP 被 Netflix / OpenAI 拉黑时，加一个 <b>Cloudflare Warp</b> 端点，把这些域名的流量从 Cloudflare 出去，立刻解锁。</div>
+          <el-button size="small" type="primary" plain :loading="warpLoading" @click="quickRegisterWarp">配 Warp →</el-button>
+        </div>
+        <div class="guide-item">
+          <div class="guide-item__icon" style="background: #2563eb">🌐</div>
+          <div class="guide-item__title">多机房节点互联</div>
+          <div class="guide-item__desc">把分散在不同 IDC 的机场节点用 <b>Tailscale</b> 组成虚拟内网，统一管理。</div>
+          <el-button size="small" plain @click="addTailscaleTemplate">配 Tailscale →</el-button>
+        </div>
+        <div class="guide-item">
+          <div class="guide-item__icon" style="background: #7c3aed">🔐</div>
+          <div class="guide-item__title">连自建 WG 落地</div>
+          <div class="guide-item__desc">你自己有 WireGuard 服务端，把机场服务器变成中转入口，二级跳到自家落地。</div>
+          <el-button size="small" plain @click="showModal(0)">手动配 WG →</el-button>
+        </div>
+      </div>
+      <div class="guide-tip">💡 99% 的小机场用不到这一页 — 只在「IP 被识别」「跨机房组网」时才需要。商业机场最常用：<b>一键 Warp</b> 解锁 ChatGPT/Netflix。</div>
     </div>
 
     <div v-else class="cards-grid">
@@ -67,6 +94,7 @@
       </div>
     </div>
 
+
     <EndpointVue
       v-model="modal.visible"
       :visible="modal.visible"
@@ -84,11 +112,12 @@
 import Data from '@/store/modules/data'
 import { Endpoint } from '@/types/endpoints'
 import { computed, defineAsyncComponent, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 
 const EndpointVue = defineAsyncComponent(() => import('@/layouts/modals/Endpoint.vue'))
 const Stats = defineAsyncComponent(() => import('@/layouts/modals/Stats.vue'))
 const WgQrCode = defineAsyncComponent(() => import('@/layouts/modals/WgQrCode.vue'))
-import { Plus, Edit, Delete, DataLine, Picture, Box } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, DataLine, Picture, MagicStick, Connection } from '@element-plus/icons-vue'
 
 const endpoints = computed((): Endpoint[] => <Endpoint[]>Data().endpoints)
 const endpointTags = computed((): any[] => endpoints.value?.map((o: Endpoint) => o.tag) ?? [])
@@ -113,6 +142,65 @@ const showQrCode = (id: number) => {
   qrcode.value.visible = true
 }
 const closeQrCode = () => { qrcode.value.visible = false }
+
+// ---------- 一键 Warp（零交互全自动） ----------
+// 后端 service/endpoints.go 看到 type=warp 且 act=new 时，会自动调用
+// WarpService.RegisterWarp 匿名向 Cloudflare 注册账号、生成 WG 私钥、
+// 拉取 IPv4/IPv6 地址、写入对端公钥。前端只需 POST 一个最小骨架。
+const warpLoading = ref(false)
+
+const quickRegisterWarp = async () => {
+  if (warpLoading.value) return
+  // 自动避开重名：warp / warp-2 / warp-3 ...
+  let tag = 'warp'
+  let n = 2
+  while (endpoints.value.some((e: any) => e.tag === tag)) {
+    tag = `warp-${n++}`
+  }
+
+  warpLoading.value = true
+  const tip = ElMessage({
+    type: 'info',
+    duration: 0,
+    showClose: false,
+    message: `正在向 Cloudflare 注册 Warp 账号…标签 ${tag}`,
+  })
+  try {
+    const ok = await Data().save('endpoints', 'new', {
+      type: 'warp',
+      tag,
+      mtu: 1408,
+      address: [],
+      private_key: '',
+      listen_port: 0,
+      peers: [{ address: '', port: 0, public_key: '' }],
+    })
+    if (ok) {
+      ElMessage.success(`Warp 注册成功！端点 "${tag}" 已自动配好 — 可在「路由列表」把 ChatGPT/Claude/Netflix 流量导到此端点`)
+    } else {
+      ElMessage.error('Warp 注册失败 — 检查落地机能否访问 api.cloudflareclient.com（部分 IDC 被墙不通）')
+    }
+  } finally {
+    tip.close()
+    warpLoading.value = false
+  }
+}
+
+// ---------- 一键 Tailscale ----------
+const addTailscaleTemplate = () => {
+  const tag = `ts-${Math.random().toString(36).slice(2, 6)}`
+  modal.value.id = 0
+  modal.value.data = JSON.stringify({
+    type: 'tailscale',
+    tag,
+    domain_resolver: 'local',
+    auth_key: '',
+    hostname: '',
+    accept_routes: true,
+  })
+  modal.value.visible = true
+  ElMessage.info('已生成 Tailscale 模板，请在弹窗中填入 auth_key 后保存')
+}
 </script>
 
 <style scoped>
@@ -129,7 +217,42 @@ const closeQrCode = () => { qrcode.value.visible = false }
 .entity-card__actions { display: flex; gap: 4px; border-top: 1px solid var(--nc-border-soft); padding-top: 4px; margin: 4px -4px -4px; }
 .entity-card__actions .el-button { flex: 1; min-width: 0; height: 32px; margin: 0 !important; }
 .status-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--nc-success); font-weight: 500; }
-.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 48px 16px; text-align: center; }
-.empty-state__icon { font-size: 36px; color: var(--nc-text-faint); }
-.empty-state__text { margin: 0; font-size: 13px; color: var(--nc-text-muted); }
+
+/* 引导卡片 */
+.guide-card { display: flex; flex-direction: column; gap: 16px; }
+.section-title { font-size: 12px; font-weight: 600; color: var(--nc-text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
+.guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.guide-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--nc-surface-soft, #f8fafc);
+  border: 1px solid var(--nc-border-soft);
+  border-radius: var(--radius-md);
+}
+.guide-item__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.guide-item__title { font-size: 14px; font-weight: 600; color: var(--nc-text-1); }
+.guide-item__desc { font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; flex: 1; }
+.guide-item__desc b { color: var(--nc-text-1); font-weight: 600; }
+.guide-item .el-button { align-self: flex-start; margin-top: 4px; }
+.guide-tip {
+  font-size: 12px;
+  color: var(--nc-text-muted);
+  padding: 10px 12px;
+  background: var(--nc-primary-soft);
+  border-radius: var(--radius-md);
+  line-height: 1.6;
+}
+.guide-tip b { color: var(--nc-text-1); font-weight: 600; }
+
 </style>

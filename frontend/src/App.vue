@@ -14,25 +14,12 @@ import { useI18n } from 'vue-i18n'
 import { Loading } from '@element-plus/icons-vue'
 import enLocale from 'element-plus/es/locale/lang/en'
 import zhCnLocale from 'element-plus/es/locale/lang/zh-cn'
-import zhTwLocale from 'element-plus/es/locale/lang/zh-tw'
-import faLocale from 'element-plus/es/locale/lang/fa'
-import ruLocale from 'element-plus/es/locale/lang/ru'
-import viLocale from 'element-plus/es/locale/lang/vi'
 
 const loading: Ref<boolean> = inject('loading') ?? ref(false)
 
 const { locale: i18nLocale } = useI18n()
 
-const epLocaleMap: Record<string, any> = {
-  en: enLocale,
-  zhHans: zhCnLocale,
-  zhHant: zhTwLocale,
-  fa: faLocale,
-  ru: ruLocale,
-  vi: viLocale,
-}
-
-const epLocale = computed(() => epLocaleMap[i18nLocale.value] || enLocale)
+const epLocale = computed(() => (i18nLocale.value === 'zhHans' ? zhCnLocale : enLocale))
 </script>
 
 <style scoped>

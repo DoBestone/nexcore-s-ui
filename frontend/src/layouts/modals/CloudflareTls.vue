@@ -15,7 +15,10 @@
     </el-steps>
 
     <el-form label-position="top" v-if="step === 0">
-      <el-alert :title="$t('tls.cf.tokenHint')" type="info" :closable="false" show-icon class="cf-alert" />
+      <el-alert v-if="savedHint" type="success" :closable="false" show-icon class="cf-alert">
+        <template #title>已加载持久化保存的 Token,可直接「校验并继续」;如需更换粘贴新 token 即可。</template>
+      </el-alert>
+      <el-alert v-else :title="$t('tls.cf.tokenHint')" type="info" :closable="false" show-icon class="cf-alert" />
       <el-form-item :label="$t('tls.cf.token')">
         <el-input
           v-model="form.token"
@@ -26,6 +29,11 @@
       </el-form-item>
       <el-form-item :label="$t('tls.cf.email')">
         <el-input v-model="form.email" :placeholder="`admin@${form.fqdn || 'example.com'}`" />
+      </el-form-item>
+      <el-form-item>
+        <el-checkbox v-model="form.persist">校验通过后保存 Token + 邮箱(用于自动续签)</el-checkbox>
+        <p class="form-hint">面板 DB 里持久化(base64 混淆),后续添加入站时「TLS → 自动签发」可一键复用,不用再粘 token。</p>
+        <el-button v-if="savedHint" size="small" link type="danger" @click="clearSaved">清空已保存的 Token</el-button>
       </el-form-item>
     </el-form>
 
@@ -119,6 +127,7 @@ interface Form {
   proxied: boolean
   fqdn: string
   tlsName: string
+  persist: boolean
 }
 
 const initialForm = (): Form => ({
@@ -132,7 +141,38 @@ const initialForm = (): Form => ({
   proxied: false,
   fqdn: '',
   tlsName: '',
+  persist: true,
 })
+
+const savedHint = ref(false)
+
+const loadSavedCreds = async () => {
+  const r = await HttpUtils.get('api/cfCredentials')
+  if (r.success && r.obj?.saved) {
+    form.value.token = r.obj.token || ''
+    form.value.email = r.obj.email || ''
+    savedHint.value = true
+  } else {
+    savedHint.value = false
+  }
+}
+
+const clearSaved = async () => {
+  await HttpUtils.post('api/cfSetCredentials', { clear: '1' })
+  form.value.token = ''
+  form.value.email = ''
+  savedHint.value = false
+  ElMessage.success('已清空保存的 Token')
+}
+
+const persistIfChecked = async () => {
+  if (!form.value.persist) return
+  await HttpUtils.post('api/cfSetCredentials', {
+    token: form.value.token,
+    email: form.value.email,
+  })
+  savedHint.value = true
+}
 
 const form = ref<Form>(initialForm())
 const zones = ref<any[]>([])
@@ -151,7 +191,13 @@ const onClose = () => {
   emit('update:modelValue', false)
 }
 
+// CF Dashboard 复制粘贴 token 时常带空格 / 换行 / 引号,后端虽然兜底
+// 清洗,但前端先净一遍能让 v-model 显示的就是真实送达 CF 的内容,
+// 用户能立刻看出是否粘错。
+const cleanToken = (raw: string) => raw.trim().replace(/^[Bb]earer\s+/, '').replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim()
+
 const onVerify = async () => {
+  form.value.token = cleanToken(form.value.token)
   loading.value = true
   const r = await HttpUtils.post('api/cfListZones', { token: form.value.token })
   loading.value = false
@@ -161,6 +207,8 @@ const onVerify = async () => {
       ElMessage.warning(i18n.global.t('tls.cf.noZone'))
       return
     }
+    // token 验证成功才入库,避免存到错误的 token
+    await persistIfChecked()
     if (zones.value.length === 1) form.value.zoneId = zones.value[0].id
     step.value = 1
   }
@@ -178,6 +226,7 @@ const detectIp = async () => {
 }
 
 const onApplyDns = async () => {
+  form.value.token = cleanToken(form.value.token)
   loading.value = true
   const payload: any = {
     token: form.value.token,
@@ -204,6 +253,7 @@ const onApplyDns = async () => {
 }
 
 const onIssue = async () => {
+  form.value.token = cleanToken(form.value.token)
   loading.value = true
   const r = await HttpUtils.post('api/cfIssueTls', {
     name: form.value.tlsName,
@@ -227,6 +277,7 @@ watch(() => props.visible, (v) => {
     form.value = initialForm()
     zones.value = []
     result.value = { fqdn: '', recordId: '' }
+    loadSavedCreds()
   }
 })
 </script>

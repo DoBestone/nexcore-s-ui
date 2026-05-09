@@ -9,6 +9,10 @@ type Inbound struct {
 	Type string `json:"type" form:"type"`
 	Tag  string `json:"tag" form:"tag" gorm:"unique"`
 
+	// Enable 控制此入站是否在 sing-box config 里下发。默认 true(GORM
+	// AutoMigrate 给已有行回填 default 值);UI 上的 switch 开关写入此字段。
+	Enable bool `json:"enable" form:"enable" gorm:"default:true"`
+
 	// Foreign key to tls table
 	TlsId uint `json:"tls_id" form:"tls_id"`
 	Tls   *Tls `json:"tls" form:"tls" gorm:"foreignKey:TlsId;references:Id"`
@@ -42,6 +46,18 @@ func (i *Inbound) UnmarshalJSON(data []byte) error {
 	delete(raw, "tls_id")
 	delete(raw, "tls")
 	delete(raw, "users")
+
+	// Enable - 缺省视为 true(老数据无此字段时不影响行为)
+	if val, exists := raw["enable"]; exists {
+		if b, ok := val.(bool); ok {
+			i.Enable = b
+		} else {
+			i.Enable = true
+		}
+		delete(raw, "enable")
+	} else {
+		i.Enable = true
+	}
 
 	// Addrs
 	i.Addrs, _ = json.MarshalIndent(raw["addrs"], "", "  ")
@@ -85,6 +101,7 @@ func (i Inbound) MarshalFull() (*map[string]interface{}, error) {
 	combined["id"] = i.Id
 	combined["type"] = i.Type
 	combined["tag"] = i.Tag
+	combined["enable"] = i.Enable
 	combined["tls_id"] = i.TlsId
 	combined["addrs"] = i.Addrs
 	combined["out_json"] = i.OutJson

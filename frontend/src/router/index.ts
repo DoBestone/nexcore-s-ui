@@ -25,19 +25,9 @@ const routes = [
         component: () => import('@/views/Inbounds.vue'),
       },
       {
-        path: '/clients',
-        name: 'pages.clients',
-        component: () => import('@/views/Clients.vue'),
-      },  
-      {
         path: '/outbounds',
         name: 'pages.outbounds',
         component: () => import('@/views/Outbounds.vue'),
-      },
-      {
-        path: '/services',
-        name: 'pages.services',
-        component: () => import('@/views/Services.vue'),
       },
       {
         path: '/endpoints',
@@ -55,19 +45,9 @@ const routes = [
         component: () => import('@/views/Tls.vue'),
       },
       {
-        path: '/basics',
-        name: 'pages.basics',
-        component: () => import('@/views/Basics.vue'),
-      },
-      {
         path: '/dns',
         name: 'pages.dns',
         component: () => import('@/views/Dns.vue'),
-      },
-      {
-        path: '/admins',
-        name: 'pages.admins',
-        component: () => import('@/views/Admins.vue'),
       },
       {
         path: '/api',
@@ -79,6 +59,15 @@ const routes = [
         name: 'pages.settings',
         component: () => import('@/views/Settings.vue'),
       },
+      // 老路径兼容:/clients 已合并进 /inbounds(每个入站点「客户端」按钮),
+      // /basics 已合并进 /settings 的「内核」tab,/admins 改密合并进「账号」tab。
+      // 这些 redirect 让旧书签 / 浏览器历史不至于报 No match 警告。
+      { path: '/clients', redirect: '/inbounds' },
+      { path: '/basics', redirect: '/settings' },
+      { path: '/admins', redirect: '/settings' },
+      { path: '/services', redirect: '/inbounds' },
+      // catch-all:其它未知路径回首页
+      { path: '/:pathMatch(.*)*', redirect: '/' },
     ],
   },
 ]

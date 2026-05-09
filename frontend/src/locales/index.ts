@@ -1,61 +1,28 @@
 import { createI18n } from 'vue-i18n'
 import en from './en'
+import zhHans from './zhcn'
 
-// 仅当前语言 + en fallback 同步加载;其它语言通过 loadLocale() 按需异步加载,
-// 显著减小初始 bundle(每个语言 ~20-25 KB)。
-const initial = localStorage.getItem('locale') ?? 'en'
-
-const messages: Record<string, any> = { en }
+// 只剩两种语言,直接全量同步加载 — 避免懒加载带来的"首屏 key 缺失"
+// 警告(loadData 在 zhHans 异步 import 完成前就触发了 t())。
+// 两文件加起来 ~50KB,可接受。
+const stored = localStorage.getItem('locale')
+const initial = stored === 'zhHans' ? 'zhHans' : 'en'
 
 export const i18n = createI18n({
   legacy: false,
   locale: initial,
   fallbackLocale: 'en',
-  messages,
+  messages: { en, zhHans },
 })
 
-const loaders: Record<string, () => Promise<any>> = {
-  en: () => Promise.resolve({ default: en }),
-  fa: () => import('./fa'),
-  vi: () => import('./vi'),
-  zhHans: () => import('./zhcn'),
-  zhHant: () => import('./zhtw'),
-  ru: () => import('./ru'),
+// 兼容老调用:其它代码可能还在调 loadLocale,留个 no-op 保持 API。
+export async function loadLocale(_lang: string) {
+  return
 }
 
-export async function loadLocale(lang: string) {
-  if (i18n.global.availableLocales.includes(lang)) return
-  const loader = loaders[lang]
-  if (!loader) return
-  const m = await loader()
-  i18n.global.setLocaleMessage(lang, m.default || m)
-}
-
-// 启动时:若 storage 设的不是 en,先把对应语言加载好
-if (initial !== 'en') {
-  loadLocale(initial).then(() => {
-    // 仍设置一次 locale 以触发 reactive 更新
-    i18n.global.locale.value = initial
-  })
-}
-
-export const locale = (() => {
-  const l = i18n.global.locale.value
-  switch (l) {
-    case 'zhHans':
-      return 'zh-cn'
-    case 'zhHant':
-      return 'zh-tw'
-    default:
-      return l
-  }
-})()
+export const locale = i18n.global.locale.value === 'zhHans' ? 'zh-cn' : 'en'
 
 export const languages = [
   { title: 'English', value: 'en' },
-  { title: 'فارسی', value: 'fa' },
-  { title: 'Tiếng Việt', value: 'vi' },
   { title: '简体中文', value: 'zhHans' },
-  { title: '繁體中文', value: 'zhHant' },
-  { title: 'Русский', value: 'ru' },
 ]

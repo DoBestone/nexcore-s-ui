@@ -31,7 +31,7 @@ func resetSetting() {
 	}
 }
 
-func updateSetting(port int, path string, subPort int, subPath string) {
+func updateSetting(port int, path string) {
 	err := database.InitDB(config.GetDBPath())
 	if err != nil {
 		fmt.Println(err)
@@ -54,22 +54,6 @@ func updateSetting(port int, path string, subPort int, subPath string) {
 			fmt.Println("set path failed:", err)
 		} else {
 			fmt.Println("set path success")
-		}
-	}
-	if subPort > 0 {
-		err := settingService.SetSubPort(subPort)
-		if err != nil {
-			fmt.Println("set sub port failed:", err)
-		} else {
-			fmt.Println("set sub port success")
-		}
-	}
-	if subPath != "" {
-		err := settingService.SetSubPath(subPath)
-		if err != nil {
-			fmt.Println("set sub path failed:", err)
-		} else {
-			fmt.Println("set sub path success")
 		}
 	}
 }
@@ -96,19 +80,6 @@ func showSetting() {
 	}
 	if (*allSetting)["webURI"] != "" {
 		fmt.Println("\tPanel URI:\t", (*allSetting)["webURI"])
-	}
-	fmt.Println()
-	fmt.Println("Current subscription settings:")
-	fmt.Println("\tSub port:\t", (*allSetting)["subPort"])
-	fmt.Println("\tSub path:\t", (*allSetting)["subPath"])
-	if (*allSetting)["subListen"] != "" {
-		fmt.Println("\tSub IP:\t", (*allSetting)["subListen"])
-	}
-	if (*allSetting)["subDomain"] != "" {
-		fmt.Println("\tSub Domain:\t", (*allSetting)["subDomain"])
-	}
-	if (*allSetting)["subURI"] != "" {
-		fmt.Println("\tSub URI:\t", (*allSetting)["subURI"])
 	}
 }
 

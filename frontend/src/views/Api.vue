@@ -51,30 +51,48 @@
         <el-table :data="filteredTokens" v-loading="tokensLoading" stripe size="small" class="nc-table">
           <el-table-column prop="id" label="#" width="60" />
           <el-table-column prop="desc" :label="$t('api.tokens.desc')" min-width="160" show-overflow-tooltip />
-          <el-table-column prop="token" :label="$t('api.tokens.token')" min-width="160">
+          <el-table-column prop="token" :label="$t('api.tokens.token')" min-width="140">
             <template #default="{ row }">
               <span class="mono token-mask">{{ row.token }}</span>
             </template>
           </el-table-column>
-          <el-table-column :label="$t('api.tokens.expiry')" width="180">
+          <el-table-column :label="$t('api.tokens.expiry')" min-width="200">
             <template #default="{ row }">
-              <span class="mono">{{ formatExpiry(row.expiry) }}</span>
+              <span class="mono expiry-text">{{ formatExpiry(row.expiry) }}</span>
+              <span class="expiry-pill" :class="expiryClass(row.expiry)">{{ $t('api.tokens.status.' + expiryClass(row.expiry)) }}</span>
             </template>
           </el-table-column>
-          <el-table-column :label="$t('actions.del')" width="80" align="center">
+          <el-table-column :label="$t('actions.action')" width="120" align="center">
             <template #default="{ row }">
-              <el-popconfirm
-                :title="$t('confirm')"
-                :confirm-button-text="$t('yes')"
-                :cancel-button-text="$t('no')"
-                @confirm="deleteToken(row.id)"
-              >
-                <template #reference>
-                  <el-button text>
-                    <el-icon style="color: var(--nc-danger)"><Delete /></el-icon>
-                  </el-button>
-                </template>
-              </el-popconfirm>
+              <el-tooltip :content="$t('api.tokens.reset')" placement="top">
+                <el-popconfirm
+                  :title="$t('api.tokens.resetConfirm')"
+                  :confirm-button-text="$t('yes')"
+                  :cancel-button-text="$t('no')"
+                  width="280"
+                  @confirm="resetToken(row.id)"
+                >
+                  <template #reference>
+                    <el-button text>
+                      <el-icon style="color: var(--nc-primary)"><Refresh /></el-icon>
+                    </el-button>
+                  </template>
+                </el-popconfirm>
+              </el-tooltip>
+              <el-tooltip :content="$t('actions.del')" placement="top">
+                <el-popconfirm
+                  :title="$t('confirm')"
+                  :confirm-button-text="$t('yes')"
+                  :cancel-button-text="$t('no')"
+                  @confirm="deleteToken(row.id)"
+                >
+                  <template #reference>
+                    <el-button text>
+                      <el-icon style="color: var(--nc-danger)"><Delete /></el-icon>
+                    </el-button>
+                  </template>
+                </el-popconfirm>
+              </el-tooltip>
             </template>
           </el-table-column>
         </el-table>
@@ -295,7 +313,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { i18n } from '@/locales'
 import HttpUtils from '@/plugins/httputil'
-import { Search, Plus, Delete, DocumentCopy, Connection } from '@element-plus/icons-vue'
+import { Search, Plus, Delete, DocumentCopy, Connection, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import Clipboard from 'clipboard'
 
@@ -361,9 +379,25 @@ const deleteToken = async (id: number) => {
   if (r.success) loadTokens()
 }
 
+const resetToken = async (id: number) => {
+  const r = await HttpUtils.post('api/resetToken', { id })
+  if (r.success) {
+    latestPlainToken.value = r.obj
+    loadTokens()
+  }
+}
+
 const formatExpiry = (expiry: number) => {
   if (!expiry) return i18n.global.t('unlimited')
   return new Date(expiry * 1000).toLocaleString()
+}
+
+const expiryClass = (expiry: number): 'permanent' | 'active' | 'expiring' | 'expired' => {
+  if (!expiry) return 'permanent'
+  const now = Math.floor(Date.now() / 1000)
+  if (expiry <= now) return 'expired'
+  if (expiry - now < 86400 * 7) return 'expiring'
+  return 'active'
 }
 
 // ---------- Docs ----------
@@ -384,7 +418,6 @@ const docGroups = [
       { method: 'GET', path: '/inbounds', desc: 'inbounds.desc', params: 'id=<id>' },
       { method: 'GET', path: '/outbounds', desc: 'outbounds.desc' },
       { method: 'GET', path: '/endpoints', desc: 'endpoints.desc' },
-      { method: 'GET', path: '/services', desc: 'services.desc' },
       { method: 'GET', path: '/tls', desc: 'tls.desc' },
       { method: 'GET', path: '/clients', desc: 'clients.desc', params: 'id=<id>' },
       { method: 'GET', path: '/config', desc: 'config.desc' },
@@ -408,10 +441,9 @@ const docGroups = [
       { method: 'POST', path: '/restartApp', desc: 'restartApp.desc' },
       { method: 'POST', path: '/restartSb', desc: 'restartSb.desc' },
       { method: 'POST', path: '/linkConvert', desc: 'linkConvert.desc', params: 'link=' },
-      { method: 'POST', path: '/subConvert', desc: 'subConvert.desc', params: 'link=' },
       { method: 'POST', path: '/importdb', desc: 'importdb.desc', params: 'multipart/form-data: db=' },
       { method: 'POST', path: '/changePass', desc: 'changePass.desc', params: 'id=&oldPass=&newUsername=&newPass=' },
-      { method: 'POST', path: '/setting', desc: 'setting.desc', params: 'port=&path=&subPort=&subPath=' },
+      { method: 'POST', path: '/setting', desc: 'setting.desc', params: 'port=&path=' },
     ],
   },
   {
@@ -472,7 +504,6 @@ const v1Endpoints = [
   { method: 'POST',   path: '/sui/cloudflare/dns/upsert-a',  note: 's-ui 独有' },
   { method: 'POST',   path: '/sui/cloudflare/tls/issue',     note: 's-ui 独有' },
   { method: 'GET',    path: '/sui/singbox/raw-config',       note: 's-ui 独有' },
-  { method: 'GET',    path: '/sui/subscription-uri',         note: 's-ui 独有' },
 ]
 
 const filteredDocGroups = computed(() => {
@@ -591,6 +622,21 @@ onMounted(() => {
 }
 
 .token-mask { letter-spacing: 0.04em; color: var(--nc-text-1); }
+
+.expiry-text { color: var(--nc-text-1); }
+.expiry-pill {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.04em;
+}
+.expiry-pill.permanent { color: #475569; background: #e2e8f0; }
+.expiry-pill.active    { color: #16a34a; background: #dcfce7; }
+.expiry-pill.expiring  { color: #d97706; background: #fef3c7; }
+.expiry-pill.expired   { color: #dc2626; background: #fee2e2; }
 
 .nc-table { background: var(--nc-surface); }
 

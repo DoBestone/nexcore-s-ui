@@ -86,6 +86,41 @@ func (s *StatsService) SaveStats(enableTraffic bool) error {
 	return tx.Create(&stats).Error
 }
 
+// GetTotals 按 resource 分组,返回每个 tag 的累计 up / down 字节数。
+// resource 取 "inbound" / "outbound" / "user"。给前端列表页用,O(1) 一次 SQL 拿全。
+// direction: true=up, false=down(与 SaveStats 保持一致)。
+func (s *StatsService) GetTotals(resource string) (map[string]map[string]int64, error) {
+	type row struct {
+		Tag       string
+		Direction bool
+		Total     int64
+	}
+	var rows []row
+	db := database.GetDB()
+	err := db.Model(model.Stats{}).
+		Select("tag, direction, SUM(traffic) AS total").
+		Where("resource = ?", resource).
+		Group("tag, direction").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]int64, len(rows))
+	for _, r := range rows {
+		m, ok := out[r.Tag]
+		if !ok {
+			m = map[string]int64{"up": 0, "down": 0}
+			out[r.Tag] = m
+		}
+		if r.Direction {
+			m["up"] = r.Total
+		} else {
+			m["down"] = r.Total
+		}
+	}
+	return out, nil
+}
+
 func (s *StatsService) GetStats(resource string, tag string, limit int) ([]model.Stats, error) {
 	var err error
 	var result []model.Stats
@@ -155,6 +190,14 @@ func (s *StatsService) downsampleStats(stats []model.Stats, maxRows int) []model
 func (s *StatsService) GetOnlines() (onlines, error) {
 	return *onlineResources, nil
 }
+// ResetByTag 清掉单个 tag 在某 resource(inbound/outbound/user)下的全部
+// 历史流量样本。"重置流量"按钮调这个 — UI 上等同于把进度条归零。
+// 不存在的 tag 静默成功(idempotent),不报错。
+func (s *StatsService) ResetByTag(resource, tag string) error {
+	db := database.GetDB()
+	return db.Where("resource = ? AND tag = ?", resource, tag).Delete(&model.Stats{}).Error
+}
+
 func (s *StatsService) DelOldStats(days int) error {
 	oldTime := time.Now().AddDate(0, 0, -(days)).Unix()
 	db := database.GetDB()

@@ -1,42 +1,58 @@
-/* el-dialog 高度硬约束 ≤ 66vh
- *  必须放在全局非 scoped 样式,因为 el-dialog 走 Teleport 挂到 body 下,scoped style 永远写不进。
- *  使用方式:<el-dialog class="constrained-dialog">
+/* 全局 el-dialog 尺寸 / 居中 / 滚动约束
+ * el-dialog 走 Teleport 挂到 body,scoped style 写不进,必须放全局非 scoped 样式。
+ * 兼顾 EP 的 align-center=false (margin: 15vh auto) 与 align-center=true (flex 居中) 两种。
  */
 
-.el-overlay-dialog .el-dialog.constrained-dialog {
-  max-height: 66vh;
-  display: flex;
-  flex-direction: column;
-  margin: 0 auto;
-  overflow: hidden;
-  border-radius: 12px;
-  width: min(640px, 92vw);
+/* 让所有 dialog overlay 用 flex 居中,避免 margin: auto 在某些情况下失效或被宽度撑开 */
+.el-overlay-dialog {
+  display: flex !important;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 32px;
+  overflow: auto;
 }
 
-.el-overlay-dialog .el-dialog.constrained-dialog .el-dialog__header {
+/* 全局 dialog 默认尺寸 + 内部 flex 布局(用于 sticky header/footer + 滚动 body) */
+.el-overlay-dialog .el-dialog {
+  /* 默认中等宽度,可被 .is-wide / .is-medium / .is-narrow 修饰符覆盖 */
+  width: min(640px, 92vw) !important;
+  max-width: 92vw !important;
+  max-height: 84vh;
+  margin: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.el-overlay-dialog .el-dialog.is-medium { width: min(800px, 92vw) !important; }
+.el-overlay-dialog .el-dialog.is-wide   { width: min(960px, 94vw) !important; }
+.el-overlay-dialog .el-dialog.is-narrow { width: min(480px, 92vw) !important; }
+
+.el-overlay-dialog .el-dialog .el-dialog__header {
   flex: 0 0 auto;
   padding: 16px 20px;
   margin: 0;
   border-bottom: 1px solid var(--nc-border);
 }
 
-.el-overlay-dialog .el-dialog.constrained-dialog .el-dialog__title {
+.el-overlay-dialog .el-dialog .el-dialog__title {
   font-size: 15px;
   font-weight: 600;
   color: var(--nc-text-1);
   font-family: var(--font-display);
 }
 
-.el-overlay-dialog .el-dialog.constrained-dialog .el-dialog__body {
+.el-overlay-dialog .el-dialog .el-dialog__body {
   flex: 1 1 auto;
   overflow-y: auto;
-  min-height: 0;            /* ⚠️ 关键:flex item 默认 min-height:auto 不允许 shrink,缺这行 overflow 永远不触发 */
+  min-height: 0; /* flex 子项默认 min-height:auto 不允许 shrink,缺这行 overflow 永远不触发 */
   padding: 16px 20px;
   font-size: 13px;
   color: var(--nc-text-3);
 }
 
-.el-overlay-dialog .el-dialog.constrained-dialog .el-dialog__footer {
+.el-overlay-dialog .el-dialog .el-dialog__footer {
   flex: 0 0 auto;
   padding: 12px 20px;
   border-top: 1px solid var(--nc-border);
@@ -44,18 +60,15 @@
 }
 
 @media (max-width: 768px) {
-  .el-overlay-dialog .el-dialog.constrained-dialog {
-    max-height: 80vh;
+  .el-overlay-dialog {
+    padding: 4vh 8px 16px;
+  }
+  .el-overlay-dialog .el-dialog,
+  .el-overlay-dialog .el-dialog.is-medium,
+  .el-overlay-dialog .el-dialog.is-wide,
+  .el-overlay-dialog .el-dialog.is-narrow {
     width: 92vw !important;
+    max-height: 88vh;
     border-radius: 10px;
   }
-}
-
-/* 大型 dialog 变体(宽一点,高度依旧 66vh 限) */
-.el-overlay-dialog .el-dialog.constrained-dialog.is-wide {
-  width: min(960px, 94vw);
-}
-
-.el-overlay-dialog .el-dialog.constrained-dialog.is-medium {
-  width: min(800px, 92vw);
 }

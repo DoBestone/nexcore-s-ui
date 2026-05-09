@@ -9,6 +9,7 @@ import (
 	"github.com/alireza0/s-ui/logger"
 	"github.com/alireza0/s-ui/service"
 	"github.com/alireza0/s-ui/util"
+	"github.com/alireza0/s-ui/util/common"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,11 +23,68 @@ type ApiService struct {
 	service.InboundService
 	service.OutboundService
 	service.EndpointService
-	service.ServicesService
 	service.PanelService
 	service.StatsService
 	service.ServerService
 	service.CloudflareService
+	service.FirewallService
+}
+
+// GetCfCredentials 返回持久化的 CF token + ACME 邮箱(供前端预填表单)。
+// token 是裸值,不再 base64 — 前端拿到就能直接用。
+func (a *ApiService) GetCfCredentials(c *gin.Context) {
+	token, email := a.SettingService.GetCfToken()
+	jsonObj(c, gin.H{
+		"token": token,
+		"email": email,
+		"saved": token != "",
+	}, nil)
+}
+
+// SetCfCredentials 持久化保存 CF token + ACME 邮箱。
+// 用于"自动签发"流程的免重复输入。表单字段:token / email / clear(如非空则清空)。
+func (a *ApiService) SetCfCredentials(c *gin.Context) {
+	if c.Request.FormValue("clear") != "" {
+		jsonMsg(c, "", a.SettingService.ClearCfToken())
+		return
+	}
+	token := c.Request.FormValue("token")
+	email := c.Request.FormValue("email")
+	if token == "" {
+		jsonMsg(c, "", common.NewError("token required"))
+		return
+	}
+	jsonMsg(c, "", a.SettingService.SetCfToken(token, email))
+}
+
+// GetFirewallStatus 把 30s 缓存的 ufw / firewalld 探测结果丢给前端。
+// 前端在入站列表上跟 inbound.listen_port 做差集,提示哪些端口被防火墙挡了。
+func (a *ApiService) GetFirewallStatus(c *gin.Context) {
+	jsonObj(c, a.FirewallService.Status(), nil)
+}
+
+// GetStatsTotals 按 resource 返回每个 tag 的累计 up/down 字节数。
+// 入站/出站列表页"总流量列"靠这个一次拉全,不用每行单点 GetStats。
+func (a *ApiService) GetStatsTotals(c *gin.Context) {
+	resource := c.Query("resource")
+	if resource == "" {
+		resource = "inbound"
+	}
+	totals, err := a.StatsService.GetTotals(resource)
+	jsonObj(c, totals, err)
+}
+
+// ResetTraffic 清掉某个 inbound/outbound/user 的累计流量样本。
+// 表单字段:resource (inbound|outbound|user) + tag。
+func (a *ApiService) ResetTraffic(c *gin.Context) {
+	resource := c.Request.FormValue("resource")
+	tag := c.Request.FormValue("tag")
+	if resource == "" || tag == "" {
+		jsonMsg(c, "", common.NewError("resource and tag required"))
+		return
+	}
+	err := a.StatsService.ResetByTag(resource, tag)
+	jsonMsg(c, "", err)
 }
 
 func (a *ApiService) LoadData(c *gin.Context) {
@@ -83,14 +141,6 @@ func (a *ApiService) getData(c *gin.Context) (interface{}, error) {
 		if err != nil {
 			return "", err
 		}
-		services, err := a.ServicesService.GetAll()
-		if err != nil {
-			return "", err
-		}
-		subURI, err := a.SettingService.GetFinalSubURI(getHostname(c))
-		if err != nil {
-			return "", err
-		}
 		trafficAge, err := a.SettingService.GetTrafficAge()
 		if err != nil {
 			return "", err
@@ -101,8 +151,6 @@ func (a *ApiService) getData(c *gin.Context) (interface{}, error) {
 		data["inbounds"] = inbounds
 		data["outbounds"] = outbounds
 		data["endpoints"] = endpoints
-		data["services"] = services
-		data["subURI"] = subURI
 		data["enableTraffic"] = trafficAge > 0
 		data["onlines"] = onlines
 	} else {
@@ -136,12 +184,6 @@ func (a *ApiService) LoadPartialData(c *gin.Context, objs []string) error {
 				return err
 			}
 			data[obj] = endpoints
-		case "services":
-			services, err := a.ServicesService.GetAll()
-			if err != nil {
-				return err
-			}
-			data[obj] = services
 		case "tls":
 			tlsConfigs, err := a.TlsService.GetAll()
 			if err != nil {
@@ -331,12 +373,6 @@ func (a *ApiService) LinkConvert(c *gin.Context) {
 	jsonObj(c, result, err)
 }
 
-func (a *ApiService) SubConvert(c *gin.Context) {
-	link := c.Request.FormValue("link")
-	result, err := util.GetExternalSub(link)
-	jsonObj(c, result, err)
-}
-
 func (a *ApiService) ImportDb(c *gin.Context) {
 	file, _, err := c.Request.FormFile("db")
 	if err != nil {
@@ -386,6 +422,12 @@ func (a *ApiService) DeleteToken(c *gin.Context) {
 	jsonMsg(c, "", err)
 }
 
+func (a *ApiService) ResetToken(c *gin.Context) {
+	tokenId := c.Request.FormValue("id")
+	token, err := a.UserService.ResetToken(tokenId)
+	jsonObj(c, token, err)
+}
+
 // addTokenForUser - v2 入口:用调用方持有的 token 推断出 username,而不是 session。
 // 表单字段同 v1 (expiry / desc),返回新 token 字符串。
 func (a *ApiService) addTokenForUser(c *gin.Context, username string) {
@@ -414,14 +456,11 @@ func (a *ApiService) getTokensForUser(c *gin.Context, username string) {
 }
 
 // UpdateSettingsAPI - v2 入口:与 v1 的 setting CLI / sui setting 等价的写接口。
-// 接受 form 字段 port / path / subPort / subPath / listen / domain / subListen / subDomain。
-// 这里只覆盖最常用的几个,够脚本化部署用;前端继续走 save 走 ConfigService.Save 改 settings 表。
+// 这里只覆盖 panel 端口与路径,够脚本化部署用;前端继续走 save 走 ConfigService.Save 改 settings 表。
 func (a *ApiService) UpdateSettingsAPI(c *gin.Context) {
 	type req struct {
-		Port      *int    `json:"port" form:"port"`
-		Path      *string `json:"path" form:"path"`
-		SubPort   *int    `json:"subPort" form:"subPort"`
-		SubPath   *string `json:"subPath" form:"subPath"`
+		Port *int    `json:"port" form:"port"`
+		Path *string `json:"path" form:"path"`
 	}
 	var r req
 	_ = c.ShouldBind(&r)
@@ -434,18 +473,6 @@ func (a *ApiService) UpdateSettingsAPI(c *gin.Context) {
 	}
 	if r.Path != nil && *r.Path != "" {
 		if err := a.SettingService.SetWebPath(*r.Path); err != nil {
-			jsonMsg(c, "setting", err)
-			return
-		}
-	}
-	if r.SubPort != nil && *r.SubPort > 0 {
-		if err := a.SettingService.SetSubPort(*r.SubPort); err != nil {
-			jsonMsg(c, "setting", err)
-			return
-		}
-	}
-	if r.SubPath != nil && *r.SubPath != "" {
-		if err := a.SettingService.SetSubPath(*r.SubPath); err != nil {
 			jsonMsg(c, "setting", err)
 			return
 		}
