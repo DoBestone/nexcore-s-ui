@@ -81,6 +81,8 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 		a.ApiService.CFUpsertA(c)
 	case "cfIssueTls":
 		a.ApiService.CFIssueTLS(c)
+	case "panelSslIssue":
+		a.ApiService.PanelSslIssue(c)
 	default:
 		jsonMsg(c, "failed", common.NewError("unknown action: ", action))
 	}
@@ -110,6 +112,10 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.GetStatus(c)
 	case "onlines":
 		a.ApiService.GetOnlines(c)
+	case "onlineIps":
+		a.ApiService.GetOnlineIPs(c)
+	case "connStats":
+		a.ApiService.GetConnStats(c)
 	case "logs":
 		a.ApiService.GetLogs(c)
 	case "changes":
@@ -124,6 +130,8 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.GetFirewallStatus(c)
 	case "cfCredentials":
 		a.ApiService.GetCfCredentials(c)
+	case "cfDetectIp":
+		a.ApiService.CFDetectIP(c)
 	case "statsTotals":
 		a.ApiService.GetStatsTotals(c)
 	case "singbox-config":

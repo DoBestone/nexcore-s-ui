@@ -31,6 +31,20 @@
         <el-tab-pane :label="$t('setting.interface')" name="t1">
           <el-form label-position="top" class="settings-form">
             <div class="settings-grid">
+              <el-form-item label="节点名称(侧边栏显示)">
+                <el-input v-model="settings.nodeName" placeholder="如「香港-1 BGP」、「东京 PCCW」(留空不显示)" />
+              </el-form-item>
+              <el-form-item label="分享链接域名来源" class="form-item--full">
+                <el-radio-group v-model="settings.linkAddrSource">
+                  <el-radio value="panel">面板域名 / IP(推荐)</el-radio>
+                  <el-radio value="tls">入站 TLS 证书域名(server_name)</el-radio>
+                </el-radio-group>
+                <p class="form-hint">
+                  vmess / vless 等分享链接里的 <code class="mono">add</code> 字段(客户端 dial 的目标)从哪里来:<br>
+                  <b>面板域名</b> = 用 panel 设置的域名 / 访问 host(DNS 必通);<br>
+                  <b>TLS server_name</b> = 用入站证书签的域名(每入站独立 add,需要管理员自己确保每个 server_name 在 CF 上有 A 记录指向本机)。
+                </p>
+              </el-form-item>
               <el-form-item :label="$t('setting.addr')">
                 <el-input v-model="settings.webListen" />
               </el-form-item>
@@ -48,6 +62,17 @@
               </el-form-item>
               <el-form-item :label="$t('setting.sslCert')">
                 <el-input v-model="settings.webCertFile" />
+              </el-form-item>
+              <!-- CF 自动签发面板 SSL — 走跟入站 TLS 一致的 wizard 流程 -->
+              <el-form-item label="自动签发 HTTPS" class="form-item--full">
+                <div class="auto-ssl">
+                  <span class="auto-ssl__hint">
+                    ⚡ Cloudflare 一键签发:打开向导 → 选 zone(域名)+ 设前缀 → 自动加 A 记录 + 签 Let's Encrypt 证书 + 写 SSL 字段 + 重启面板
+                  </span>
+                  <el-button type="primary" @click="cfPanelWizardVisible = true">
+                    打开签发向导
+                  </el-button>
+                </div>
               </el-form-item>
               <el-form-item :label="$t('setting.webUri')">
                 <el-input v-model="settings.webURI" />
@@ -280,11 +305,21 @@
         </el-tab-pane>
       </el-tabs>
     </div>
+
+    <CloudflareTls
+      v-if="cfPanelWizardVisible"
+      v-model="cfPanelWizardVisible"
+      :visible="cfPanelWizardVisible"
+      mode="panel"
+      @close="cfPanelWizardVisible = false"
+    />
   </div>
 </template>
 
 <script lang="ts" setup>
-import { Ref, computed, inject, onMounted, ref } from 'vue'
+import { Ref, computed, defineAsyncComponent, inject, onMounted, ref } from 'vue'
+
+const CloudflareTls = defineAsyncComponent(() => import('@/layouts/modals/CloudflareTls.vue'))
 import HttpUtils from '@/plugins/httputil'
 import { FindDiff } from '@/plugins/utils'
 import { i18n } from '@/locales'
@@ -365,6 +400,8 @@ const settings = ref<any>({
   sessionMaxAge: '0',
   trafficAge: '30',
   timeLocation: 'Asia/Tehran',
+  nodeName: '',
+  linkAddrSource: 'panel',
 })
 
 onMounted(async () => {
@@ -400,6 +437,9 @@ const save = async () => {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// 面板 SSL 签发 wizard — 跟入站 TLS 一致的多步流程,复用 CloudflareTls.vue
+const cfPanelWizardVisible = ref(false)
 
 const restartApp = async () => {
   loading.value = true
@@ -596,6 +636,21 @@ const saveKernel = async () => {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 8px 16px;
 }
+/* 跨行的项(如 CF 自动 SSL 那条)用 grid-column: 1/-1 拉到一行 */
+.settings-grid :deep(.form-item--full) { grid-column: 1 / -1; }
+.auto-ssl {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.06), transparent);
+  border: 1px dashed rgba(124, 58, 237, 0.4);
+  border-radius: var(--radius-md);
+  width: 100%;
+}
+.auto-ssl__hint { font-size: 12.5px; color: var(--nc-text-1); flex: 1; min-width: 200px; }
+.auto-ssl__warn { font-size: 12px; color: var(--nc-warning); margin: 4px 0 0; }
 
 .settings-row {
   display: flex;

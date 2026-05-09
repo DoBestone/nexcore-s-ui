@@ -28,6 +28,7 @@ type ApiService struct {
 	service.ServerService
 	service.CloudflareService
 	service.FirewallService
+	service.PanelSSLService
 }
 
 // GetCfCredentials 返回持久化的 CF token + ACME 邮箱(供前端预填表单)。
@@ -257,6 +258,75 @@ func (a *ApiService) GetStatus(c *gin.Context) {
 func (a *ApiService) GetOnlines(c *gin.Context) {
 	onlines, err := a.StatsService.GetOnlines()
 	jsonObj(c, onlines, err)
+}
+
+// PanelSslIssue 用 Cloudflare DNS-01 给面板域名签 ACME 证书,自动写
+// webCertFile/webKeyFile/webDomain settings + 触发面板重启。复用持久化的
+// cfCredentials(token + email),前端只需提供域名。
+func (a *ApiService) PanelSslIssue(c *gin.Context) {
+	domain := c.Request.FormValue("domain")
+	if domain == "" {
+		domain = c.Query("domain")
+	}
+	if domain == "" {
+		jsonMsg(c, "", common.NewError("缺少 domain 参数"))
+		return
+	}
+	token, email := a.SettingService.GetCfToken()
+	if token == "" || email == "" {
+		jsonMsg(c, "", common.NewError("先去 TLS 一键签发流程粘贴 CF Token + ACME 邮箱并保存,这里才能复用"))
+		return
+	}
+	if err := a.PanelSSLService.IssueAndApply(&a.SettingService, &a.CloudflareService, domain, email, token); err != nil {
+		jsonMsg(c, "", err)
+		return
+	}
+	// 异步重启,先把响应送出去再关 — 否则用户连接 reset 看不到 success
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = a.PanelService.RestartPanel(1)
+	}()
+	jsonObj(c, gin.H{
+		"domain":   domain,
+		"certFile": a.tryGet("webCertFile"),
+		"keyFile":  a.tryGet("webKeyFile"),
+		"hint":     "签发成功,2 秒后面板会自动重启,请用 https://" + domain + ":<port>" + a.tryGet("webPath") + " 重新登录",
+	}, nil)
+}
+
+// tryGet 静默拿单个 setting,失败返回空字符串(供 UI 展示用)
+func (a *ApiService) tryGet(key string) string {
+	if all, err := a.SettingService.GetAllSetting(); err == nil && all != nil {
+		if v, ok := (*all)[key]; ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// GetConnStats 返回 sing-box 当前活跃连接数(TCP / UDP 分别)。给前端面板
+// "网络速率"区域 5-10s 拉一次显示并发情况。
+func (a *ApiService) GetConnStats(c *gin.Context) {
+	tcp, udp := 0, 0
+	if box := a.ConfigService.CoreInstance(); box != nil {
+		tcp, udp = box.ConnTracker().CountByNetwork()
+	}
+	jsonObj(c, gin.H{"tcp": tcp, "udp": udp}, nil)
+}
+
+// GetOnlineIPs 返回单个 tag(inbound 或 user)当前活跃的 source IP 列表。
+// 查询参数:resource (inbound|user) + tag (inbound 的 tag 或 client name)。
+// 用于"限制 IP 数"功能取数据,以及客户端管理界面"看现在哪些 IP 在用我账号"。
+// user 跨入站汇总:同一账号在 N 个 inbound 用,IP 列表合一去重。
+func (a *ApiService) GetOnlineIPs(c *gin.Context) {
+	resource := c.Query("resource")
+	tag := c.Query("tag")
+	if resource == "" || tag == "" {
+		jsonMsg(c, "", common.NewError("resource and tag required"))
+		return
+	}
+	ips := a.StatsService.GetOnlineIPs(resource, tag)
+	jsonObj(c, gin.H{"ips": ips, "count": len(ips)}, nil)
 }
 
 func (a *ApiService) GetLogs(c *gin.Context) {
@@ -533,6 +603,18 @@ func (a *ApiService) CFUpsertA(c *gin.Context) {
 		return
 	}
 	jsonObj(c, gin.H{"fqdn": fqdn, "recordId": recId}, nil)
+}
+
+// CFDetectIP 在「服务器」上探测公网 IP,返回给前端写到 A 记录里。
+// 前端不能自己调 ipify — 那拿到的是用户浏览器(可能在家、可能在跳板)
+// 的出口 IP,签到 DNS 上是错的。
+func (a *ApiService) CFDetectIP(c *gin.Context) {
+	ip := a.CloudflareService.DetectPublicIP()
+	if ip == "" {
+		jsonMsg(c, "", errEmpty("public ip"))
+		return
+	}
+	jsonObj(c, gin.H{"ip": ip}, nil)
 }
 
 func (a *ApiService) CFIssueTLS(c *gin.Context) {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -75,6 +76,9 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 				json.Unmarshal(restFields["managed"], &ss_managed)
 			}
 		}
+		// users 一律走 clients 表多对多查,返回 client.name 字符串列表 ——
+		// 包括 Basic Auth 协议(mixed/socks/http/naive)。前端用 length 显示
+		// 客户数,统一 InboundClients modal 管理。
 		if s.hasUser(inbound.Type) &&
 			!(inbound.Type == "shadowtls" && shadowtls_version < 3) &&
 			!(inbound.Type == "shadowsocks" && ss_managed) {
@@ -133,6 +137,10 @@ func (s *InboundService) Save(tx *gorm.DB, act string, data json.RawMessage, ini
 				if err != nil && err != os.ErrInvalid {
 					return err
 				}
+				// 同步断现有连接 — RemoveInbound 只是从 manager 注销 tag,
+				// 已建立的 TCP/SOCKS 连接还在跑。不断的话客户端 keep-alive
+				// reuse 旧连接,disable 后还能用,体感"开关无效"。
+				corePtr.GetInstance().ConnTracker().CloseConnByInbound(oldTag)
 			}
 
 			if inbound.Enable {
@@ -198,6 +206,12 @@ func (s *InboundService) Save(tx *gorm.DB, act string, data json.RawMessage, ini
 		}
 		err = tx.Where("tag = ?", tag).Delete(model.Inbound{}).Error
 		if err != nil {
+			return err
+		}
+		// 清掉 stats 表里这个 tag 的累加流量样本 —— 否则用户重建同名 inbound
+		// 时新流量会跟旧的混在一起累加(GetTotals 只按 tag 聚合),让"总流量"
+		// 一开始就不是 0。
+		if err = tx.Where("resource = ? AND tag = ?", "inbound", tag).Delete(&model.Stats{}).Error; err != nil {
 			return err
 		}
 	default:
@@ -286,14 +300,78 @@ func (s *InboundService) fetchUsers(db *gorm.DB, inboundType string, condition s
 		}
 		usersJson = append(usersJson, json.RawMessage(user))
 	}
+
+	// 安全兜底:任何多账号协议在 users 数组为空时,sing-box 行为可能危险:
+	//   - mixed/socks/http/naive:users=null → 无 Basic Auth 模式 → 任意账号都通 = 开放代理
+	//   - vless/vmess/trojan 等 UUID 协议:users=null 通常 sing-box 会启动失败或拒绝所有连接
+	// 这里统一塞一个哨兵账号(谁都猜不到的 64 字节随机密码 + 不可能的 UUID),
+	// 让 sing-box 进入"有鉴权但没人能登"的状态 = 等价"全部 client disabled
+	// 后端口实际不可用",安全且可观测(端口监听但连接全 reject)。
+	if len(usersJson) == 0 {
+		usersJson = []json.RawMessage{sentinelUserFor(inboundType)}
+	}
 	return usersJson, nil
+}
+
+// hasAnyEnabledUser 查这个 inbound 是否还有任何 enabled client 关联。
+// 没有 = sing-box 不该监听这个端口(否则:mixed 变开放代理 / 其他协议任何
+// 客户端都能 TCP 握手成功只是协议层失败 → 探测器看起来"还能用")。
+func (s *InboundService) hasAnyEnabledUser(tx *gorm.DB, inboundType string, inboundId uint) bool {
+	if !s.hasUser(inboundType) {
+		return true // 无凭证概念的协议(direct/tun 等)不受此约束
+	}
+	var n int64
+	cond := fmt.Sprintf("%d IN (SELECT json_each.value FROM json_each(clients.inbounds))", inboundId)
+	if err := tx.Raw(fmt.Sprintf("SELECT COUNT(*) FROM clients WHERE enable=true AND %s", cond)).Scan(&n).Error; err != nil {
+		return true // 查失败时放行,免误关
+	}
+	return n > 0
+}
+
+// sentinelUserFor 给指定协议生成一个不可能登录的"哨兵账号"。每次调用密码
+// 都是新随机的,免被人通过共谋猜中。
+func sentinelUserFor(inboundType string) json.RawMessage {
+	rnd := func(n int) string {
+		const alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+		b := make([]byte, n)
+		_, _ = cryptorand.Read(b)
+		for i := range b {
+			b[i] = alpha[int(b[i])%len(alpha)]
+		}
+		return string(b)
+	}
+	pwd := rnd(64)
+	uuid := fmt.Sprintf("%s-%s-%s-%s-%s", rnd(8), rnd(4), rnd(4), rnd(4), rnd(12))
+	switch inboundType {
+	case "mixed", "socks", "http", "naive":
+		return json.RawMessage(fmt.Sprintf(`{"username":"__nb_sentinel__","password":%q}`, pwd))
+	case "vless":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","uuid":%q}`, uuid))
+	case "vmess":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","uuid":%q,"alterId":0}`, uuid))
+	case "trojan", "anytls":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","password":%q}`, pwd))
+	case "shadowsocks", "shadowsocks16", "shadowtls":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","password":%q}`, pwd))
+	case "hysteria":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","auth_str":%q}`, pwd))
+	case "hysteria2":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","password":%q}`, pwd))
+	case "tuic":
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","uuid":%q,"password":%q}`, uuid, pwd))
+	default:
+		return json.RawMessage(fmt.Sprintf(`{"name":"__nb_sentinel__","password":%q}`, pwd))
+	}
 }
 
 func (s *InboundService) addUsers(db *gorm.DB, inboundJson []byte, inboundId uint, inboundType string) ([]byte, error) {
 	if !s.hasUser(inboundType) {
 		return inboundJson, nil
 	}
-
+	// 所有多账号协议统一从 clients 表注入(包括 mixed/socks/http/naive 的
+	// Basic Auth),走 fetchUsers — randomConfigs 已经为这些协议在
+	// clients.config 里生成 {username, password},sing-box 拿到的就是
+	// [{username, password}, ...] 数组,跟原生格式兼容。
 	var inbound map[string]interface{}
 	err := json.Unmarshal(inboundJson, &inbound)
 	if err != nil {
@@ -308,6 +386,7 @@ func (s *InboundService) addUsers(db *gorm.DB, inboundJson []byte, inboundId uin
 
 	return json.Marshal(inbound)
 }
+
 
 func (s *InboundService) initUsers(db *gorm.DB, inboundJson []byte, clientIds string, inboundType string) ([]byte, error) {
 	ClientIds := strings.Split(clientIds, ",")
@@ -350,6 +429,13 @@ func (s *InboundService) RestartInbounds(tx *gorm.DB, ids []uint) error {
 		}
 		// Close all existing connections
 		corePtr.GetInstance().ConnTracker().CloseConnByInbound(inbound.Tag)
+
+		// 入站本身被 disable 时不再 AddInbound — 否则 client 改动触发的
+		// RestartInbounds 会"复活"已 disable 的入站(用户报:disable inbound
+		// 后改动相关 client,端口又活了)。
+		if !inbound.Enable {
+			continue
+		}
 
 		inboundConfig, err := inbound.MarshalJSON()
 		if err != nil {

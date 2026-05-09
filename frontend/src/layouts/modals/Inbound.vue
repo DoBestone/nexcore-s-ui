@@ -94,6 +94,26 @@
           </div>
           <p v-if="onlyTls && !inbound.tls_id" class="form-warn">{{ inbound.type }} 协议必须配置 TLS,点「自动签发」一键生成或去 TLS 设置页创建。</p>
         </el-form-item>
+        <!-- 中转目标(虚拟字段 — 实际写入 route.rules 一条 binding) -->
+        <el-form-item label="中转目标(可选)">
+          <el-select v-model="defaultOutbound" filterable placeholder="本机按全局路由出公网(不中转)" style="width: 100%">
+            <el-option value="inherit" label="本机按全局路由出公网(不中转)" />
+            <el-option-group v-if="proxyOutTags.length" label="转发到落地节点">
+              <el-option v-for="t in proxyOutTags" :key="t" :value="t" :label="`→ ${t}`" />
+            </el-option-group>
+            <el-option-group v-if="endpointOutbounds.length" label="转发到虚拟网卡端点">
+              <el-option v-for="e in endpointOutbounds" :key="e.tag" :value="e.tag">
+                <span>→ {{ e.tag }}</span>
+                <span v-if="endpointPurpose(e.type)" class="opt-suffix">{{ endpointPurpose(e.type) }}</span>
+              </el-option>
+            </el-option-group>
+          </el-select>
+          <p class="form-hint">
+            选了落地出站 = <b>中转模式</b>:用户 → 本机入站 → <span class="mono">{{ defaultOutbound !== 'inherit' && defaultOutbound !== 'direct' ? defaultOutbound : '...' }}</span> → 公网。
+            本机不落地,流量转给落地节点出公网,常用于前置加速 / 隐藏落地 IP。
+            底层是在 route.rules 最前插一条 <span class="mono">{ inbound: ["{{ inbound.tag || '...' }}"], outbound: "..." }</span>,改名 / 删除入站自动同步。
+          </p>
+        </el-form-item>
       </div>
 
       <!-- 协议专属字段(凭据 / 参数) -->
@@ -251,41 +271,22 @@
         </div>
       </div>
 
-      <!-- 认证用户(SOCKS / HTTP / Mixed)— 端口对外开放必加,否则被扫到就裸奔 -->
-      <div v-if="hasAuthUsers" class="form-section">
-        <div class="form-section__head">
-          <h4 class="form-section__title">
-            认证用户(<span class="auth-warn">{{ $t('mustHave','强烈建议') }}</span>)
-          </h4>
-          <div class="auth-actions">
-            <el-tooltip content="一键随机一组用户名 / 密码" placement="top">
-              <el-button size="small" @click="addAuthUser">
-                <el-icon><Plus /></el-icon>添加
-              </el-button>
-            </el-tooltip>
-          </div>
-        </div>
-        <p class="form-hint">
-          监听在公网时,SOCKS / HTTP / Mixed 不带账号密码 = 任何人扫到端口就能用,等于开放代理被滥用甚至送人头。<br>
-          至少配一组凭据,客户端连接时填这套用户名密码。
-        </p>
-        <div v-if="!authUsers.length" class="auth-empty">
-          <el-button type="primary" size="small" @click="addAuthUser">
-            <el-icon><Plus /></el-icon>生成一组凭据
-          </el-button>
-        </div>
-        <div v-for="(u, i) in authUsers" :key="i" class="auth-row">
-          <span class="auth-row__idx">{{ i + 1 }}</span>
-          <el-input v-model="u.username" placeholder="用户名" class="auth-row__input" />
-          <el-input v-model="u.password" placeholder="密码" type="password" show-password class="auth-row__input" />
-          <el-button text @click="randomAuthUser(i)" title="重抽">
-            <el-icon><Refresh /></el-icon>
-          </el-button>
-          <el-button text @click="removeAuthUser(i)" title="删除">
-            <el-icon style="color: var(--nc-danger)"><Delete /></el-icon>
-          </el-button>
-        </div>
-      </div>
+      <!-- 认证用户:mixed/socks/http/naive 跟 vless/vmess/trojan 一样,
+           凭证已统一走 clients 表 + InboundClients modal 管理(创建客户端时
+           会自动按入站协议生成 username/password)。这里不再嵌入 inbound
+           编辑器,免双入口写同一份数据。 -->
+      <el-alert
+        v-if="hasAuthUsers"
+        type="info"
+        :closable="false"
+        show-icon
+        class="auth-redirect-alert"
+      >
+        <template #title>
+          <b>{{ inbound.type }}</b> 是多账号协议 — 凭证(username / password)在「客户端」管理。
+          保存入站后到列表行点「客户端」按钮添加即可,创建时会按 mixed/socks/http 自动生成账号密码。
+        </template>
+      </el-alert>
 
       <!-- Transport(VLESS / VMess / Trojan) -->
       <div v-if="supportsTransport" class="form-section">
@@ -412,16 +413,96 @@ const loading = ref(false)
 const inboundJson = ref('{}')
 const jsonError = ref('')
 
+// ---------- 默认出站绑定(虚拟字段) ----------
+// sing-box inbound 本身没有 outbound 字段。机场说的「该入站默认走某出站」
+// 实际上由 route.rules 里一条 {inbound:[tag], outbound:tag} 实现。这里
+// 在 modal 上加虚拟字段,保存时同步到 route.rules,改名/删除自动同步。
+// 用 _nb_binding 标记由本逻辑管理的规则,不会覆盖用户手编规则。
+const BINDING_MARKER = '_nb_binding'
+const defaultOutbound = ref<string>('inherit') // 'inherit' | 'direct' | <outbound tag>
+// 中转目标候选 — 只列真实代理出口 + 虚拟网卡端点。
+//   - 落地节点:真实代理协议(vless/vmess/trojan/ss/hysteria/tuic 等)+ 聚合器
+//   - 端点:虚拟网卡端点(warp/wireguard/tailscale)
+// 不列 direct/block/dns 这种 system 出站 —— "本机出公网"统一走「不中转」选项,
+// 由全局路由配置决定具体走哪个出站。中转目标只表达"转给落地"的语义。
+const PROXY_OUTBOUND_TYPES = new Set([
+  'vless', 'vmess', 'trojan', 'shadowsocks', 'shadowtls', 'anytls',
+  'hysteria', 'hysteria2', 'tuic', 'naive',
+  'socks', 'http', 'ssh',
+  'selector', 'urltest',
+])
+const proxyOutTags = computed((): string[] =>
+  ((Data().outbounds as any[]) ?? [])
+    .filter((o: any) => o?.tag && PROXY_OUTBOUND_TYPES.has(o.type))
+    .map((o: any) => o.tag),
+)
+const endpointOutbounds = computed((): { tag: string; type: string }[] =>
+  ((Data().endpoints as any[]) ?? [])
+    .filter((e: any) => e?.tag)
+    .map((e: any) => ({ tag: e.tag, type: e.type })),
+)
+const bindableOutTags = computed((): string[] => [
+  ...proxyOutTags.value,
+  ...endpointOutbounds.value.map((e) => e.tag),
+])
+// endpoint 类型对应的机场场景说明 — 在下拉 label 后追加
+const endpointPurpose = (type: string): string => {
+  switch (type) {
+    case 'warp':      return 'Cloudflare Warp · 解锁 ChatGPT / Netflix 等被拉黑 IP'
+    case 'wireguard': return '自建 WireGuard 落地'
+    case 'tailscale': return 'Tailscale 组网'
+    default:          return ''
+  }
+}
+const findBindingRule = (cfg: any, tag: string): any | null => {
+  for (const r of (cfg?.route?.rules || [])) {
+    if (r?.[BINDING_MARKER] && Array.isArray(r.inbound) && r.inbound.includes(tag)) return r
+  }
+  return null
+}
+const syncDefaultOutboundFromConfig = () => {
+  const r = findBindingRule(Data().config, inbound.value.tag)
+  if (!r) { defaultOutbound.value = 'inherit'; return }
+  // 老版本"强制本机直连"已经下线,把残留的 action:direct binding 显示为
+  // inherit。下次保存会按 inherit 清掉那条规则,自动迁移到"按全局路由"。
+  if (r.action === 'direct') defaultOutbound.value = 'inherit'
+  else if (r.outbound) defaultOutbound.value = r.outbound
+  else defaultOutbound.value = 'inherit'
+}
+// 保存 inbound 后调:按 defaultOutbound 同步 route.rules,有差异才推 config
+const persistDefaultOutbound = async (oldTag: string) => {
+  const cfg = JSON.parse(JSON.stringify(Data().config || {}))
+  if (!cfg.route) cfg.route = {}
+  if (!Array.isArray(cfg.route.rules)) cfg.route.rules = []
+  const newTag = inbound.value.tag
+  // 把 oldTag/newTag 上由本逻辑生成的 binding 全清掉,免重复
+  cfg.route.rules = cfg.route.rules.filter((r: any) => {
+    if (!r?.[BINDING_MARKER]) return true
+    if (Array.isArray(r.inbound) && (r.inbound.includes(oldTag) || r.inbound.includes(newTag))) return false
+    return true
+  })
+  // 按当前选择写新规则到 rules 最前(优先匹配)。
+  // 'inherit' = 不写规则,本机出公网由全局路由决定(final / 其它 user 配的 rules)
+  if (defaultOutbound.value && defaultOutbound.value !== 'inherit') {
+    cfg.route.rules.unshift({ [BINDING_MARKER]: true, inbound: [newTag], action: 'route', outbound: defaultOutbound.value })
+  }
+  // 比对一下;无差异不调 save,免无谓 sing-box reload
+  if (JSON.stringify((Data().config as any)?.route?.rules || []) !== JSON.stringify(cfg.route.rules)) {
+    await Data().save('config', 'set', cfg)
+  }
+}
+
 const SS_METHODS = [
   '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305',
   'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305', 'xchacha20-ietf-poly1305',
   'none',
 ]
 
-// 协议分组(类型按钮组用):多用户 = 一端口多客户(共享端口,各自凭据);
-// 单用户 = 端口本身就是入口,无客户维度。
-// 注:mixed/socks/http/naive 后端虽接受 users[] 但实践上单点鉴权常用,
-// 为避免下拉里全堆"多用户"显得太长,这里把它们归到对应惯用语义。
+// 协议分组(类型按钮组用):
+//   多用户 = 一端口 N 账号,凭证统一走 clients 表(InboundClients modal 管)
+//     - UUID 系:vless/vmess/trojan/ss/shadowtls/hysteria/hysteria2/tuic/anytls
+//     - Basic Auth 系:mixed/socks/http/naive(N 组 username/password)
+//   单用户 = 端口本身就是入口,无凭证概念(无法/无需创建客户端)
 const MULTI_USER_TYPES = [
   { value: 'vless',       label: 'VLESS' },
   { value: 'vmess',       label: 'VMess' },
@@ -433,11 +514,11 @@ const MULTI_USER_TYPES = [
   { value: 'tuic',        label: 'TUIC' },
   { value: 'anytls',      label: 'AnyTLS' },
   { value: 'naive',       label: 'Naive' },
+  { value: 'mixed',       label: 'Mixed (SOCKS+HTTP)' },
+  { value: 'socks',       label: 'SOCKS' },
+  { value: 'http',        label: 'HTTP' },
 ]
 const SINGLE_USER_TYPES = [
-  { value: 'mixed',    label: 'Mixed' },
-  { value: 'socks',    label: 'SOCKS' },
-  { value: 'http',     label: 'HTTP' },
   { value: 'direct',   label: 'Direct' },
   { value: 'tun',      label: 'Tun' },
   { value: 'redirect', label: 'Redirect' },
@@ -457,39 +538,9 @@ const onlyTls = computed(() => OnlyTLS.includes(inbound.value.type))
 const hasProtocolFields = computed(() => HasProtocolFields.includes(inbound.value.type))
 const supportsTransport = computed(() => HasTransport.includes(inbound.value.type))
 
-// SOCKS / HTTP / Mixed 协议支持 users[] 鉴权 — 端口对外暴露必加,
-// 否则任何扫端口的人就能白嫖代理。
-const HasAuthUsers = ['socks', 'http', 'mixed']
-const hasAuthUsers = computed(() => HasAuthUsers.includes(inbound.value.type))
-
-const authUsers = computed<Array<{ username: string; password: string }>>({
-  get: () => Array.isArray(inbound.value.users) ? inbound.value.users : [],
-  set: (v) => { inbound.value.users = v },
-})
-
-const randomCred = () => {
-  // 用户名固定前缀 + 4 字符随机,密码 16 字符随机(URL safe)
-  const alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  const pick = (n: number) => Array.from({ length: n }, () => alpha[Math.floor(Math.random() * alpha.length)]).join('')
-  return { username: 'user_' + pick(4), password: pick(16) }
-}
-
-const addAuthUser = () => {
-  authUsers.value = [...authUsers.value, randomCred()]
-  refreshJson()
-}
-const randomAuthUser = (i: number) => {
-  const list = [...authUsers.value]
-  list[i] = randomCred()
-  authUsers.value = list
-  refreshJson()
-}
-const removeAuthUser = (i: number) => {
-  const list = [...authUsers.value]
-  list.splice(i, 1)
-  authUsers.value = list
-  refreshJson()
-}
+// hasAuthUsers 仅给上面 alert 用 — mixed/socks/http/naive 协议显示一段
+// "凭证去客户端管理"的提示。凭证本身已统一走 clients 表 + InboundClients。
+const hasAuthUsers = computed(() => ['socks', 'http', 'mixed', 'naive'].includes(inbound.value.type))
 
 // 协议传输层推荐套餐 — 一键应用 transport + tls 组合
 // vless: tcp+Reality(直连无证书最优) / ws+TLS(走 CDN 隐藏 IP)
@@ -666,6 +717,8 @@ const loadData = async (id: number) => {
   if (HasInData.includes(inbound.value.type) && inbound.value.out_json == null) {
     inbound.value.out_json = {}
   }
+  // 把现有 route.rules 里指向此入站的 binding 反向同步到 select
+  syncDefaultOutboundFromConfig()
   refreshJson()
   loading.value = false
 }
@@ -686,6 +739,7 @@ const updateData = (id: number) => {
     }
     title.value = 'add'
     loading.value = false
+    defaultOutbound.value = 'inherit'
     refreshJson()
   }
 }
@@ -702,10 +756,8 @@ const changeType = () => {
     delete inbound.value.addrs
     delete inbound.value.out_json
   }
-  // SOCKS / HTTP / Mixed 自动塞一组凭据 — 新建场景下默认安全
-  if (props.id === 0 && HasAuthUsers.includes(inbound.value.type) && !inbound.value.users?.length) {
-    inbound.value.users = [randomCred()]
-  }
+  // 凭证(SOCKS/HTTP/Mixed/Naive 的 username/password,以及 vless/vmess 等
+  // 的 UUID)统一在 InboundClients modal 创建,不再在入站编辑器里直接塞。
   refreshJson()
 }
 
@@ -722,8 +774,18 @@ const saveChanges = async () => {
   loading.value = true
   // 创建/编辑入站不再做"初始客户绑定"——保存后用户去入站列表点「客户端」按钮
   // 走 InboundClients modal 单独管理。这条路径更清晰、避免双入口配同一份数据。
+  // 编辑场景下,先记下旧 tag,免得改名后 binding 找不到旧规则去清
+  let oldTag = ''
+  if (props.id > 0) {
+    const old = (Data().inbounds as any[])?.find((i: any) => i.id === props.id)
+    oldTag = old?.tag || ''
+  }
   const success = await Data().save('inbounds', props.id == 0 ? 'new' : 'edit', inbound.value, [])
-  if (success) closeModal()
+  if (success) {
+    // 入站保存成功后,同步 route.rules binding(无差异不会触发 reload)
+    try { await persistDefaultOutbound(oldTag) } catch (e) { /* 不阻塞关闭 */ }
+    closeModal()
+  }
   loading.value = false
 }
 
@@ -949,6 +1011,12 @@ watch(() => props.visible, (v) => {
   color: var(--nc-text-muted);
   margin: 4px 0 0;
 }
+/* el-option 里的灰色后缀说明:让标签 + 用途说明在同一行,后缀小字 */
+.opt-suffix {
+  margin-left: 8px;
+  color: var(--nc-text-muted);
+  font-size: 11.5px;
+}
 
 /* TLS 行:select + 自动签发按钮 */
 .tls-row {
@@ -1008,34 +1076,6 @@ watch(() => props.visible, (v) => {
 }
 .preset-chip.is-active .preset-chip__title { color: var(--nc-primary); }
 
-/* 认证用户区块 */
-.auth-warn {
-  color: var(--nc-warning, #d97706);
-  font-weight: 600;
-}
-.auth-empty {
-  display: flex;
-  justify-content: center;
-  padding: 8px 0;
-}
-.auth-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-.auth-row__idx {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--nc-bg-3);
-  font-size: 11px;
-  color: var(--nc-text-muted);
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-}
-.auth-row__input { flex: 1; min-width: 0; }
+/* mixed/socks/http/naive 引导跳到 InboundClients 的提示条 */
+.auth-redirect-alert { margin: 12px 0; }
 </style>

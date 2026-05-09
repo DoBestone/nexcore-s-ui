@@ -11,9 +11,11 @@ import (
 )
 
 type onlines struct {
-	Inbound  []string `json:"inbound,omitempty"`
-	User     []string `json:"user,omitempty"`
-	Outbound []string `json:"outbound,omitempty"`
+	Inbound    []string       `json:"inbound,omitempty"`
+	User       []string       `json:"user,omitempty"`
+	Outbound   []string       `json:"outbound,omitempty"`
+	InboundIPs map[string]int `json:"inbound_ips,omitempty"` // tag → 当前活跃 source IP 数
+	UserIPs    map[string]int `json:"user_ips,omitempty"`    // 客户端 name → 当前活跃 source IP 数
 }
 
 var onlineResources = &onlines{}
@@ -22,6 +24,15 @@ type StatsService struct {
 }
 
 func (s *StatsService) SaveStats(enableTraffic bool) error {
+	// 先 reset onlines —— 不论核心是否运行,旧"在线"快照都不该再展示。
+	// 旧版只在能拿到 stats 时才 reset,sing-box 没运行时直接 return,
+	// 前端会一直显示停止前的在线列表(明显错误)。
+	onlineResources.Inbound = nil
+	onlineResources.Outbound = nil
+	onlineResources.User = nil
+	onlineResources.InboundIPs = nil
+	onlineResources.UserIPs = nil
+
 	if corePtr == nil || !corePtr.IsRunning() {
 		return nil
 	}
@@ -35,10 +46,15 @@ func (s *StatsService) SaveStats(enableTraffic bool) error {
 	}
 	stats := st.GetStats()
 
-	// Reset onlines
-	onlineResources.Inbound = nil
-	onlineResources.Outbound = nil
-	onlineResources.User = nil
+	// 在线 IP 快照(60s 窗口)。即使本轮没流量样本(下面 len(*stats)==0 会
+	// 提前 return)也想拿到 IP 计数,所以放在 stats 检查之前。
+	inbIPs, usrIPs := st.SnapshotOnlineIPs(60)
+	if len(inbIPs) > 0 {
+		onlineResources.InboundIPs = inbIPs
+	}
+	if len(usrIPs) > 0 {
+		onlineResources.UserIPs = usrIPs
+	}
 
 	if len(*stats) == 0 {
 		return nil
@@ -190,12 +206,42 @@ func (s *StatsService) downsampleStats(stats []model.Stats, maxRows int) []model
 func (s *StatsService) GetOnlines() (onlines, error) {
 	return *onlineResources, nil
 }
+
+// GetOnlineIPs 查询单个 inbound 或 user 当前 60s 窗口内的活跃 source IP 列表。
+// 用法:resource="user" + tag=客户端 name → 该账号被哪些 IP 同时在用(跨入站
+// 自动汇总去重,因为 userIPs 按 name 索引)。给"限制 IP 数"功能取数据。
+func (s *StatsService) GetOnlineIPs(resource, tag string) []string {
+	if corePtr == nil || !corePtr.IsRunning() {
+		return []string{}
+	}
+	box := corePtr.GetInstance()
+	if box == nil {
+		return []string{}
+	}
+	st := box.StatsTracker()
+	if st == nil {
+		return []string{}
+	}
+	return st.QueryOnlineIPs(resource, tag, 60)
+}
 // ResetByTag 清掉单个 tag 在某 resource(inbound/outbound/user)下的全部
 // 历史流量样本。"重置流量"按钮调这个 — UI 上等同于把进度条归零。
 // 不存在的 tag 静默成功(idempotent),不报错。
+//
+// 注:user 资源除了删 stats 行,还要把 client.up/down 字段同步清零 ——
+// SaveStats 每 10s 把 user delta 累加进 client.up/down 维护"客户端总流量",
+// 这是另一个数据源(UsageStats / 客户端列表用)。只删 stats 不清字段
+// 会让两份数字不一致,用户重置后还看到旧值,以为没生效。
 func (s *StatsService) ResetByTag(resource, tag string) error {
 	db := database.GetDB()
-	return db.Where("resource = ? AND tag = ?", resource, tag).Delete(&model.Stats{}).Error
+	if err := db.Where("resource = ? AND tag = ?", resource, tag).Delete(&model.Stats{}).Error; err != nil {
+		return err
+	}
+	if resource == "user" {
+		return db.Model(&model.Client{}).Where("name = ?", tag).
+			Updates(map[string]interface{}{"up": 0, "down": 0}).Error
+	}
+	return nil
 }
 
 func (s *StatsService) DelOldStats(days int) error {

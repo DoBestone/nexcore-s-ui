@@ -111,6 +111,10 @@ func (s *OutboundService) Save(tx *gorm.DB, act string, data json.RawMessage) er
 		if err != nil {
 			return err
 		}
+		// 同入站,清掉 stats 表 orphan 行,免重建同名 outbound 时旧流量混进来
+		if err = tx.Where("resource = ? AND tag = ?", "outbound", tag).Delete(&model.Stats{}).Error; err != nil {
+			return err
+		}
 	default:
 		return common.NewErrorf("unknown action: %s", act)
 	}

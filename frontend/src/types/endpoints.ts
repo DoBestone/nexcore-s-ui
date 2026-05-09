@@ -69,11 +69,21 @@ type InterfaceMap = {
 // Create union type from InterfaceMap
 export type Endpoint = InterfaceMap[keyof InterfaceMap]
 
-// Create defaultValues object dynamically
+// Create defaultValues object dynamically.
+// 注:tailscale 不再预填 domain_resolver — 旧版写死 'local',但 sing-box
+// 1.13 找不到 tag 为 'local' 的 DNS server(本仓库 DNS preset 用 'dns-local'),
+// 启动时报 unknown server。留空让 sing-box 用 route.default_domain_resolver 兜底。
+// wireguard 给一个空 peer 占位,免得用户保存空 endpoint 让 sing-box 起不来。
 const defaultValues: Record<EpType, Endpoint> = {
-  wireguard: { type: EpTypes.Wireguard, address: ['10.0.0.2/32','fe80::2/128'], private_key: '', listen_port: 0 },
-  warp: { type: EpTypes.Warp, address: [], private_key: '', listen_port: 0, mtu: 1420, peers: [{ address: '', port: 0, public_key: ''}] },
-  tailscale: { type: EpTypes.Tailscale, domain_resolver: 'local' },
+  wireguard: {
+    type: EpTypes.Wireguard,
+    address: ['10.0.0.2/32', 'fe80::2/128'],
+    private_key: '',
+    listen_port: 0,
+    peers: [{ address: '', port: 0, public_key: '' }],
+  },
+  warp: { type: EpTypes.Warp, address: [], private_key: '', listen_port: 0, mtu: 1420, peers: [{ address: '', port: 0, public_key: '' }] },
+  tailscale: { type: EpTypes.Tailscale },
 }
 
 export function createEndpoint<T extends Endpoint>(type: string,json?: Partial<T>): Endpoint {

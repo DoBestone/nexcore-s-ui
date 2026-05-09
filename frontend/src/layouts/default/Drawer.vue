@@ -9,7 +9,10 @@
   >
     <div class="nc-aside__brand">
       <img src="@/assets/logo.svg" alt="S-UI" class="nc-aside__logo" />
-      <span class="nc-aside__title" v-show="!collapsed || isMobile">S-UI</span>
+      <div class="nc-aside__brand-text" v-show="!collapsed || isMobile">
+        <span class="nc-aside__title">S-UI</span>
+        <span v-if="nodeName" class="nc-aside__node" :title="nodeName">{{ nodeName }}</span>
+      </div>
       <button
         v-if="isMobile"
         class="nc-aside__close"
@@ -48,6 +51,8 @@
 <script lang="ts" setup>
 import { useRoute } from 'vue-router'
 import { logout } from '@/plugins/httputil'
+import { ref, onMounted } from 'vue'
+import HttpUtils from '@/plugins/httputil'
 import {
   House,
   Download,
@@ -93,6 +98,16 @@ const onNavClick = () => {
 const onLogout = () => {
   logout()
 }
+
+// 节点名称(管理员在「设置」里配的 nodeName,空就不显示)。挂载时拉一次即可,
+// 改完 settings 重启面板才生效,不必轮询。
+const nodeName = ref<string>('')
+onMounted(async () => {
+  try {
+    const r = await HttpUtils.get('api/settings')
+    if (r.success && r.obj && r.obj.nodeName) nodeName.value = String(r.obj.nodeName).trim()
+  } catch { /* 拿不到不影响主流程 */ }
+})
 </script>
 
 <style scoped>
@@ -141,12 +156,23 @@ const onLogout = () => {
   flex-shrink: 0;
 }
 
+.nc-aside__brand-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .nc-aside__title {
   font-family: var(--font-display);
   font-size: 16px;
   font-weight: 700;
   color: var(--nc-text-1);
   letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+.nc-aside__node {
+  font-size: 11px;
+  color: var(--nc-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
 }
 
 .nc-aside__close {

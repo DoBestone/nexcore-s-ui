@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alireza0/s-ui/logger"
+	"github.com/alireza0/s-ui/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +30,18 @@ func getRemoteIp(c *gin.Context) string {
 }
 
 func getHostname(c *gin.Context) string {
+	// 客户端分享链接的 add 字段就是这个 hostname。优先级:
+	//   1) panel settings.webDomain — 管理员显式设的"对外域名",DNS 必通
+	//      (面板自身 SSL 流程已经验过解析),最稳
+	//   2) c.Request.Host — 用户访问面板的 Host header,作为 fallback
+	// 旧版只看 (2),如果用户用 IP 访问面板,生成的 vmess add 就全是 IP;
+	// 即使 inbound TLS 用域名签的(server_name),add 写 IP 也会让追求"机场
+	// 节点显示域名"的运维感到困惑;更糟的是 inbound TLS 用 wildcard 时
+	// server_name 是 *.x.example,add 不能用 *,只能 fallback IP/Host。
+	settingSvc := service.SettingService{}
+	if domain, _ := settingSvc.GetWebDomain(); domain != "" {
+		return domain
+	}
 	host := c.Request.Host
 	if strings.Contains(host, ":") {
 		host, _, _ = net.SplitHostPort(c.Request.Host)

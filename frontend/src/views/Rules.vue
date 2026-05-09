@@ -3,7 +3,7 @@
     <div class="page-header with-actions">
       <div class="page-header-text">
         <h2 class="page-title">{{ $t('pages.rules') }}</h2>
-        <p class="page-desc">{{ $t('rules.desc', '路由规则、规则集与导入导出') }}</p>
+        <p class="page-desc">路由规则、规则集与导入导出 — 不懂可点「一键最佳实践」自动套用机场最优栈;下方所有开关、模板、删除、拖拽切换即保存生效</p>
       </div>
       <div class="page-header-actions">
         <el-button @click="applyBestPractice">
@@ -113,7 +113,7 @@
     <div class="nc-card preset-card">
       <div class="preset-head">
         <h4 class="section-title">推荐路由规则</h4>
-        <span class="preset-hint">打开即自动加入配置 · 关闭即移除 · 需要的规则集会自动注册</span>
+        <span class="preset-hint">切换即自动保存并热载 sing-box · 需要的规则集会自动注册</span>
       </div>
       <div class="preset-grid">
         <div v-for="p in routeRulePresets" :key="p.key" class="preset-item">
@@ -369,16 +369,57 @@ const routeMark = computed({
 
 const stateChange = computed(() => FindDiff.deepCompare(appConfig.value, oldConfig.value))
 
-const saveConfig = async () => {
+// 共享保存:开关切换 / 模板 / 最佳实践 / modal 提交 / 删除 / 拖拽 / 导入,
+// 都走它。基础参数表单(final / default_interface / default_mark / auto_detect_interface)
+// 仍走头部「保存」按钮,避免每个 keystroke 都打到后端 sing-box reload。
+const autoSave = async (label?: string): Promise<boolean> => {
   loading.value = true
-  // 保存前自检:确保 direct 出站存在(防止用户手编 JSON 后保存导致 sing-box 启动失败)
+  // 1) direct 出站缺失时补(rule_set download_detour 或路由规则 outbound 引用)
   if (configReferencesDirect() && isDirectOutboundMissing()) {
     await Data().save('outbounds', 'new', { type: 'direct', tag: 'direct' })
   }
+  // 2) outbounds 完全为空兜底(sing-box 1.10+ 不再隐式提供 direct)
+  if (((Data().outbounds as any[]) ?? []).length === 0) {
+    await Data().save('outbounds', 'new', { type: 'direct', tag: 'direct' })
+  }
+  // 3) 路由规则引用了不存在的 rule_set tag → 清空字段(规则保留)
+  //    用户删 ruleset 后,引用它的 rule 就悬空,这里兜底,免得 sing-box 启动失败
+  const knownTags = new Set(rulesets.value.map((rs: any) => rs.tag).filter(Boolean))
+  let cleaned = 0
+  for (const r of (rules.value as any[])) {
+    if (Array.isArray(r?.rule_set)) {
+      const filtered = r.rule_set.filter((t: string) => knownTags.has(t))
+      if (filtered.length !== r.rule_set.length) {
+        if (filtered.length === 0) delete r.rule_set
+        else r.rule_set = filtered
+        cleaned++
+      }
+    }
+  }
+  if (cleaned > 0) ElMessage.info(`自动清理 ${cleaned} 条规则的悬空 rule_set 引用`)
+
+  // 4) route.final 悬空 → 清空,sing-box 才不会启动失败
+  const outboundTagSet = new Set([
+    ...(((Data().outbounds as any[]) ?? []).map((o: any) => o.tag).filter(Boolean)),
+    ...(((Data().endpoints as any[]) ?? []).map((e: any) => e.tag).filter(Boolean)),
+  ])
+  if (configReferencesDirect()) outboundTagSet.add('direct')
+  if (route.value?.final && !outboundTagSet.has(route.value.final)) {
+    delete (route.value as any).final
+  }
+
   const success = await Data().save('config', 'set', appConfig.value)
-  if (success) oldConfig.value = JSON.parse(JSON.stringify(Data().config))
+  if (success) {
+    oldConfig.value = JSON.parse(JSON.stringify(Data().config))
+    if (label) ElMessage.success(label)
+  } else if (label) {
+    ElMessage.error('保存失败,sing-box 未重载,请检查日志')
+  }
   loading.value = false
+  return success
 }
+
+const saveConfig = () => autoSave()
 
 const clients = computed(() => Data().clients?.map((c: any) => c.name) ?? [])
 const route = computed((): any => appConfig.value.route ?? {})
@@ -414,12 +455,17 @@ const showRuleModal = (index: number) => {
   ruleModal.value.visible = true
 }
 const closeRuleModal = () => { ruleModal.value.visible = false }
-const saveRuleModal = (data: any) => {
-  if (ruleModal.value.index === -1) rules.value.push(data)
+const saveRuleModal = async (data: any) => {
+  const isNew = ruleModal.value.index === -1
+  if (isNew) rules.value.push(data)
   else rules.value[ruleModal.value.index] = data
   ruleModal.value.visible = false
+  await autoSave(isNew ? '已新增规则并保存' : '已更新规则并保存')
 }
-const delRule = (index: number) => { rules.value.splice(index, 1) }
+const delRule = async (index: number) => {
+  rules.value.splice(index, 1)
+  await autoSave('已删除规则并保存')
+}
 
 const rulesetModal = ref({ visible: false, index: -1, data: '' })
 const showRulesetModal = (index: number) => {
@@ -428,12 +474,23 @@ const showRulesetModal = (index: number) => {
   rulesetModal.value.visible = true
 }
 const closeRulesetModal = () => { rulesetModal.value.visible = false }
-const saveRulesetModal = (data: ruleset) => {
-  if (rulesetModal.value.index === -1) rulesets.value.push(data)
+const saveRulesetModal = async (data: ruleset) => {
+  const isNew = rulesetModal.value.index === -1
+  if (isNew) rulesets.value.push(data)
   else rulesets.value[rulesetModal.value.index] = data
   rulesetModal.value.visible = false
+  await autoSave(isNew ? '已新增规则集并保存' : '已更新规则集并保存')
 }
-const delRuleset = (index: number) => { rulesets.value.splice(index, 1) }
+const delRuleset = async (index: number) => {
+  // 删之前先扫一下有没有规则在引用,有就告警(autoSave 的 self-check 会清悬空引用)
+  const tag = rulesets.value[index]?.tag
+  const refCount = tag ? (rules.value as any[]).filter((r: any) => Array.isArray(r.rule_set) && r.rule_set.includes(tag)).length : 0
+  rulesets.value.splice(index, 1)
+  if (refCount > 0) {
+    ElMessage.warning(`${tag} 被 ${refCount} 条规则引用,已自动从这些规则里清除该引用`)
+  }
+  await autoSave('已删除规则集并保存')
+}
 
 // ---------- 一键路由模板 ----------
 // URL 必须实际存在于 sing-geosite/rule-set 分支(2026-05 校验过)。
@@ -507,7 +564,7 @@ const applyTemplate = async (keysCsv: string) => {
     added++
   }
   if (added > 0) {
-    ElMessage.success(`${i18n.global.t('rule.tmpl.applied')}: +${added}`)
+    await autoSave(`${i18n.global.t('rule.tmpl.applied')}: +${added}`)
   } else if (skipped.length > 0) {
     ElMessage.info(`${i18n.global.t('rule.tmpl.alreadyExists')}: ${skipped.join(', ')}`)
   }
@@ -515,19 +572,20 @@ const applyTemplate = async (keysCsv: string) => {
 
 const draggedItemIndex = ref<number | null>(null)
 const onDragStart = (index: number) => { draggedItemIndex.value = index }
-const onDrop = (index: number) => {
-  if (draggedItemIndex.value !== null) {
-    const dragged = rules.value[draggedItemIndex.value]
-    rules.value.splice(draggedItemIndex.value, 1)
-    rules.value.splice(index, 0, dragged)
-    draggedItemIndex.value = null
-  }
+const onDrop = async (index: number) => {
+  if (draggedItemIndex.value === null) return
+  if (draggedItemIndex.value === index) { draggedItemIndex.value = null; return }
+  const dragged = rules.value[draggedItemIndex.value]
+  rules.value.splice(draggedItemIndex.value, 1)
+  rules.value.splice(index, 0, dragged)
+  draggedItemIndex.value = null
+  await autoSave('已调整规则顺序并保存')
 }
 
 const importRulesModal = ref({ visible: false })
 const showImportRule = () => { importRulesModal.value.visible = true }
 const closeImportRule = () => { importRulesModal.value.visible = false }
-const saveImportRule = (block: any, mode: 'merge' | 'replace', applyFinal: boolean) => {
+const saveImportRule = async (block: any, mode: 'merge' | 'replace', applyFinal: boolean) => {
   if (mode === 'replace') {
     route.value.rules = block.rules ?? []
     route.value.rule_set = block.rule_set ?? []
@@ -538,14 +596,16 @@ const saveImportRule = (block: any, mode: 'merge' | 'replace', applyFinal: boole
   }
   if (applyFinal && block.final) route.value.final = block.final
   importRulesModal.value.visible = false
+  await autoSave(`已${mode === 'replace' ? '替换' : '合并'}导入规则并保存`)
 }
 
 const importRulesetsModal = ref({ visible: false })
 const showImportRulesets = () => { importRulesetsModal.value.visible = true }
 const closeImportRulesets = () => { importRulesetsModal.value.visible = false }
-const saveImportRulesets = (items: any[]) => {
+const saveImportRulesets = async (items: any[]) => {
   rulesets.value.push(...items)
   importRulesetsModal.value.visible = false
+  await autoSave(`已导入 ${items.length} 个规则集并保存`)
 }
 
 // ---------- 推荐路由规则（开关即用） ----------
@@ -674,33 +734,43 @@ const ensureRulesetRegistered = async (deps: { tag: string; url: string }[]) => 
   }
 }
 
-const togglePreset = async (p: RoutePreset, on: boolean) => {
+// 不带 autoSave 的纯插入,被批量入口(applyBestPractice / applyTemplate)复用,
+// 末尾统一 autoSave 一次,免对每条规则单独 reload sing-box。
+const enablePreset = async (p: RoutePreset): Promise<boolean> => {
   if (!route.value.rules) route.value.rules = []
-  const idx = rules.value.findIndex(p.match)
-  if (on) {
-    // 路由规则中的 outbound:'direct' 也依赖 direct 出站存在
-    const built = p.build()
-    if (built?.outbound === 'direct') await ensureDirectOutbound()
-    if (p.ruleSets?.length) await ensureRulesetRegistered(p.ruleSets)
-    if (idx === -1) rules.value.push(built)
-  } else {
-    if (idx >= 0) rules.value.splice(idx, 1)
-  }
+  if (rules.value.findIndex(p.match) !== -1) return false
+  const built = p.build()
+  if (built?.outbound === 'direct') await ensureDirectOutbound()
+  if (p.ruleSets?.length) await ensureRulesetRegistered(p.ruleSets)
+  rules.value.push(built)
+  return true
 }
 
-// 一键最佳实践：商业机场默认开这套（按推荐顺序加）
-const applyBestPractice = () => {
+const togglePreset = async (p: RoutePreset, on: boolean) => {
+  if (!route.value.rules) route.value.rules = []
+  if (on) {
+    await enablePreset(p)
+  } else {
+    const idx = rules.value.findIndex(p.match)
+    if (idx >= 0) rules.value.splice(idx, 1)
+  }
+  await autoSave(on ? `已启用 ${p.name} 并保存` : `已停用 ${p.name} 并保存`)
+}
+
+// 一键最佳实践：商业机场默认开这套(按推荐顺序加,末尾一次性 autoSave)
+// 旧版本 fire-and-forget 调 togglePreset → 5 个 ensureDirectOutbound 同时
+// race,可能产生重复 direct 出站或丢状态。这里改成串行 await。
+const applyBestPractice = async () => {
   const order = ['hijack-dns', 'sniff', 'private-direct', 'cn-direct', 'block-ads']
   let added = 0
   for (const key of order) {
     const p = routeRulePresets.find((x) => x.key === key)
-    if (p && !isPresetEnabled(p.key)) {
-      togglePreset(p, true)
-      added++
-    }
+    if (!p) continue
+    const ok = await enablePreset(p)
+    if (ok) added++
   }
   if (added > 0) {
-    ElMessage.success(`已套用商业机场最佳实践 — 启用 ${added} 条规则（劫持 DNS · 嗅探 · 私有直连 · 国内直连 · 屏蔽广告）`)
+    await autoSave(`已套用商业机场最佳实践:启用 ${added} 条规则(劫持 DNS · 嗅探 · 私有直连 · 国内直连 · 屏蔽广告)并自动保存`)
   } else {
     ElMessage.info('最佳实践规则已全部启用')
   }

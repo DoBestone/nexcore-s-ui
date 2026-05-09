@@ -98,6 +98,36 @@
           <span v-else class="ic-muted">—</span>
         </template>
       </el-table-column>
+      <el-table-column label="在线 IP" width="100" align="center">
+        <template #default="{ row }">
+          <el-popover
+            v-if="userIpCount(row.name) > 0"
+            placement="top"
+            trigger="click"
+            :width="280"
+            @show="loadUserIps(row.name)"
+          >
+            <template #reference>
+              <el-tag :type="userIpCount(row.name) > 1 ? 'warning' : 'success'" size="small" effect="plain" class="mono ic-clickable">
+                {{ userIpCount(row.name) }}
+              </el-tag>
+            </template>
+            <div class="ip-pop">
+              <div class="ip-pop__head">
+                <b>{{ row.name }}</b> · 60s 内 {{ userIpCount(row.name) }} IP
+                <span v-if="userIpCount(row.name) > 1" class="warn-text">⚠ 疑似账号共享</span>
+              </div>
+              <div v-if="userIpsLoading[row.name]" class="ip-pop__loading">加载中…</div>
+              <div v-else-if="userIpsCache[row.name]?.length" class="ip-pop__list mono">
+                <div v-for="ip in userIpsCache[row.name]" :key="ip" class="ip-pop__item">{{ ip }}</div>
+              </div>
+              <div v-else class="ip-pop__empty">暂无具体 IP(可能正在过期 prune 中)</div>
+              <div class="ip-pop__hint">跨入站自动去重 — 同一账号在 N 个入站用,所有 source IP 汇总到这里</div>
+            </div>
+          </el-popover>
+          <span v-else class="ic-muted">0</span>
+        </template>
+      </el-table-column>
 
       <el-table-column :label="$t('actions.action')" width="156" align="center">
         <template #default="{ row }">
@@ -166,6 +196,7 @@
 import { computed, defineAsyncComponent, ref } from 'vue'
 import Data from '@/store/modules/data'
 import { HumanReadable } from '@/plugins/utils'
+import HttpUtils from '@/plugins/httputil'
 import { Plus, Edit, Delete, Picture, DataLine, Search } from '@element-plus/icons-vue'
 
 const ClientModal = defineAsyncComponent(() => import('@/layouts/modals/Client.vue'))
@@ -177,6 +208,23 @@ const emit = defineEmits<{ close: []; 'update:modelValue': [v: boolean] }>()
 
 const filter = ref('')
 const onlineUsers = computed(() => Data().onlines?.user ?? [])
+// 60s 窗口内此账号被多少独立 source IP 同时使用(>1 = 疑似账号共享)
+const userIpCount = (name: string): number => Data().onlines?.user_ips?.[name] ?? 0
+
+// 点 popover 时按需拉具体 IP 列表 — 不在 list 阶段批量拉,免得用户根本不点
+// 也发 N 个请求。结果缓存到 popover 关闭/重新加载,避免 hover 来回时重复打。
+const userIpsCache = ref<Record<string, string[]>>({})
+const userIpsLoading = ref<Record<string, boolean>>({})
+const loadUserIps = async (name: string) => {
+  if (userIpsLoading.value[name]) return
+  userIpsLoading.value[name] = true
+  try {
+    const r = await HttpUtils.get('api/onlineIps', { resource: 'user', tag: name })
+    if (r.success) userIpsCache.value[name] = (r.obj?.ips || []).sort()
+  } finally {
+    delete userIpsLoading.value[name]
+  }
+}
 
 const allClients = computed((): any[] => Data().clients ?? [])
 const scopedClients = computed((): any[] => {
@@ -206,14 +254,27 @@ const delClient = async (id: number) => {
 
 const toggling = ref<Record<number, boolean>>({})
 const toggleEnable = async (row: any, v: boolean) => {
-  toggling.value = { ...toggling.value, [row.id]: true }
+  // 乐观更新:立即把 row.enable 改成 v,switch 视觉马上锁定到新位置。
+  // 旧版 await save 期间 row.enable 没变,el-switch 的 :model-value(单向)
+  // 检测到跟用户切换后的视觉不一致,立刻回退到原值,用户体感"开关切了
+  // 又自己跳回去 = 控制无效"。失败时回滚 + 弹错误。
+  const original = row.enable
+  row.enable = v
+  toggling.value[row.id] = true
   try {
     const fresh = await Data().loadClients(row.id)
+    if (!fresh || !(fresh as any).id) {
+      row.enable = original
+      ElMessage.error('客户端加载失败,请刷新页面')
+      return
+    }
     ;(fresh as any).enable = v
     const ok = await Data().save('clients', 'edit', fresh)
-    if (ok) row.enable = v
+    if (!ok) {
+      row.enable = original   // 失败回滚到原状态
+    }
   } finally {
-    toggling.value = { ...toggling.value, [row.id]: false }
+    delete toggling.value[row.id]
   }
 }
 
@@ -327,4 +388,15 @@ const closeModal = () => emit('close')
   background: var(--nc-success);
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
 }
+
+/* 在线 IP popover */
+.ic-clickable { cursor: pointer; transition: transform 0.1s; }
+.ic-clickable:hover { transform: scale(1.05); }
+.ip-pop { display: flex; flex-direction: column; gap: 8px; }
+.ip-pop__head { font-size: 12.5px; color: var(--nc-text-1); }
+.ip-pop__head .warn-text { color: var(--nc-warning); margin-left: 6px; font-weight: 600; }
+.ip-pop__loading, .ip-pop__empty { font-size: 12px; color: var(--nc-text-muted); padding: 8px 0; text-align: center; }
+.ip-pop__list { max-height: 200px; overflow-y: auto; border: 1px solid var(--nc-border-soft); border-radius: var(--radius-sm); padding: 6px 8px; }
+.ip-pop__item { font-size: 12px; line-height: 1.7; color: var(--nc-text-1); }
+.ip-pop__hint { font-size: 11px; color: var(--nc-text-muted); border-top: 1px solid var(--nc-border-soft); padding-top: 6px; }
 </style>

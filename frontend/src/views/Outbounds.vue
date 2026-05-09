@@ -29,15 +29,28 @@
       </el-input>
       <div class="ob-toolbar__stats">
         <span class="ob-stat"><span class="ob-stat__num">{{ outbounds.length }}</span>{{ $t('outbounds.total', '出站') }}</span>
-        <span v-if="onlineCount > 0" class="ob-stat ob-stat--ok">
-          <span class="status-dot online"></span>{{ onlineCount }} {{ $t('online') }}
-        </span>
         <span v-if="passCount > 0" class="ob-stat ob-stat--ok">
           <el-icon><CircleCheck /></el-icon>{{ passCount }} {{ $t('outbounds.pass', '通') }}
         </span>
         <span v-if="failCount > 0" class="ob-stat ob-stat--err">
           <el-icon><CircleClose /></el-icon>{{ failCount }} {{ $t('outbounds.fail', '不通') }}
         </span>
+        <span v-if="hiddenSysCount > 0" class="ob-stat ob-stat--muted">
+          已隐藏 {{ hiddenSysCount }} 个系统出站
+        </span>
+        <el-tooltip placement="top" :content="autoProbe ? `每 ${PROBE_INTERVAL_MS / 1000}s 自动探测可见出站延迟与在线状态;下一轮 ${nextProbeIn}s` : '点开关启用自动探测'">
+          <span class="ob-stat ob-stat--switch">
+            <el-switch v-model="autoProbe" size="small" />
+            <span style="margin-left: 6px">自动探测</span>
+            <span v-if="autoProbe" class="ob-probe-tick mono">{{ nextProbeIn }}s</span>
+          </span>
+        </el-tooltip>
+        <el-tooltip placement="top" content="direct / block / dns 是面板自动补的内置出口,被路由直连规则和规则集下载隐式引用,删了 sing-box 启动失败。默认隐藏让列表只显示真正的代理节点。">
+          <span class="ob-stat ob-stat--switch">
+            <el-switch v-model="showSystem" size="small" />
+            <span style="margin-left: 6px">显示系统出站</span>
+          </span>
+        </el-tooltip>
       </div>
     </div>
 
@@ -52,6 +65,7 @@
     <el-table
       v-else
       :data="filteredOutbounds"
+      :row-key="rowKey"
       stripe
       size="small"
       class="nc-table ob-table"
@@ -92,69 +106,62 @@
         </template>
       </el-table-column>
 
-      <el-table-column :label="$t('online')" width="80" align="center">
+      <el-table-column :label="$t('out.delay')" width="110" align="center">
         <template #default="{ row }">
-          <span v-if="onlines.includes(row.tag)" class="status-dot online" :title="$t('online')"></span>
-          <span v-else class="ob-muted">—</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column :label="$t('out.delay')" width="120" align="center">
-        <template #default="{ row }">
-          <el-icon v-if="checkResults[row.tag]?.loading" class="is-loading"><Loading /></el-icon>
-          <template v-else-if="checkResults[row.tag]">
-            <el-tag
-              v-if="checkResults[row.tag].success"
-              :type="latencyType(checkResults[row.tag].data?.Delay ?? 0)"
-              size="small"
-              effect="plain"
-              class="mono"
-            >
-              {{ checkResults[row.tag].data?.Delay }} ms
-            </el-tag>
-            <el-tooltip
-              v-else
-              :content="checkResults[row.tag].errorMessage || $t('failed')"
-              placement="top"
-            >
-              <el-icon style="color: var(--nc-danger)"><CircleClose /></el-icon>
-            </el-tooltip>
-          </template>
-          <span v-else class="ob-muted">—</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column :label="$t('actions.action')" width="180" align="center">
-        <template #default="{ row }">
-          <el-tooltip :content="$t('actions.test', '测试')" placement="top">
-            <el-button text @click="checkOutbound(row.tag)">
-              <el-icon><Stopwatch /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip v-if="Data().enableTraffic" :content="$t('stats.graphTitle', '流量图')" placement="top">
-            <el-button text @click="showStats(row.tag)">
-              <el-icon><DataLine /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip :content="$t('actions.edit')" placement="top">
-            <el-button text @click="showModal(row.id)">
-              <el-icon style="color: var(--nc-primary)"><Edit /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip :content="$t('actions.del')" placement="top">
-            <el-popconfirm
-              :title="$t('confirm')"
-              :confirm-button-text="$t('yes')"
-              :cancel-button-text="$t('no')"
-              @confirm="delOutbound(row.tag)"
-            >
-              <template #reference>
-                <el-button text>
-                  <el-icon style="color: var(--nc-danger)"><Delete /></el-icon>
-                </el-button>
+          <!-- 整个 cell 可点 = 重测;loading 时禁点。原"测试"按钮收编进延迟值,
+               腾出操作列空间给真正的操作 -->
+          <el-tooltip
+            :content="checkResults[row.tag]?.loading ? '探测中…' : (checkResults[row.tag]?.errorMessage || '点击重测')"
+            placement="top"
+          >
+            <span class="delay-cell" :class="{ 'is-clickable': !checkResults[row.tag]?.loading }" @click="!checkResults[row.tag]?.loading && checkOutbound(row.tag)">
+              <el-icon v-if="checkResults[row.tag]?.loading" class="is-loading"><Loading /></el-icon>
+              <template v-else-if="checkResults[row.tag]">
+                <el-tag
+                  v-if="checkResults[row.tag].success"
+                  :type="latencyType(checkResults[row.tag].data?.Delay ?? 0)"
+                  size="small"
+                  effect="plain"
+                  class="mono"
+                >
+                  {{ checkResults[row.tag].data?.Delay }} ms
+                </el-tag>
+                <el-icon v-else style="color: var(--nc-danger)"><CircleClose /></el-icon>
               </template>
-            </el-popconfirm>
+              <el-icon v-else><Stopwatch /></el-icon>
+            </span>
           </el-tooltip>
+        </template>
+      </el-table-column>
+
+      <el-table-column :label="$t('actions.action')" width="140" align="center">
+        <template #default="{ row }">
+          <div class="ob-actions">
+            <el-tooltip v-if="Data().enableTraffic" :content="$t('stats.graphTitle', '流量图')" placement="top">
+              <el-button text size="small" @click="showStats(row.tag)">
+                <el-icon><DataLine /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip :content="$t('actions.edit')" placement="top">
+              <el-button text size="small" @click="showModal(row.id)">
+                <el-icon style="color: var(--nc-primary)"><Edit /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip :content="$t('actions.del')" placement="top">
+              <el-popconfirm
+                :title="$t('confirm')"
+                :confirm-button-text="$t('yes')"
+                :cancel-button-text="$t('no')"
+                @confirm="delOutbound(row.tag)"
+              >
+                <template #reference>
+                  <el-button text size="small">
+                    <el-icon style="color: var(--nc-danger)"><Delete /></el-icon>
+                  </el-button>
+                </template>
+              </el-popconfirm>
+            </el-tooltip>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -181,7 +188,7 @@
 import Data from '@/store/modules/data'
 import HttpUtils from '@/plugins/httputil'
 import { Outbound } from '@/types/outbounds'
-import { computed, defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const OutboundVue = defineAsyncComponent(() => import('@/layouts/modals/Outbound.vue'))
 const Stats = defineAsyncComponent(() => import('@/layouts/modals/Stats.vue'))
@@ -199,16 +206,23 @@ interface CheckResult {
 
 const checkResults = ref<Record<string, CheckResult>>({})
 
+// 静默更新:in-place 改字段(reactivity 只重 evaluate 引用了对应 tag 的
+// computed),不替换 checkResults 整对象 —— 否则每 10s 整个 table 都会
+// re-render 一次,体感"在跳"。
+const setCheckResult = (tag: string, r: CheckResult) => {
+  checkResults.value[tag] = r
+}
+
 const checkOutbound = async (tag: string) => {
-  checkResults.value = { ...checkResults.value, [tag]: { loading: true, success: false } }
+  setCheckResult(tag, { loading: true, success: false })
   const msg = await HttpUtils.get('api/checkOutbound', { tag })
   const success = msg.success && msg.obj?.OK
   const errorMessage = success ? undefined : (msg.obj?.Error ?? msg.msg ?? '')
-  checkResults.value = {
-    ...checkResults.value,
-    [tag]: { loading: false, success, data: msg.obj ?? null, errorMessage },
-  }
+  setCheckResult(tag, { loading: false, success, data: msg.obj ?? null, errorMessage })
 }
+
+// el-table 用稳定 key 做 row diff,id 没有就用 tag,避免 10s 一轮全 unmount
+const rowKey = (row: any) => row?.id ?? row?.tag ?? ''
 
 const testingAll = ref(false)
 const checkAllOutbounds = async () => {
@@ -235,10 +249,23 @@ const refresh = async () => {
 
 const filter = ref('')
 const outbounds = computed((): Outbound[] => <Outbound[]>(Data().outbounds ?? []))
+
+// 系统出站(direct / block / dns)是面板自动补的"内置出口",被 rule_set
+// download_detour 和路由直连规则隐式引用。它们跟用户的代理节点同框露脸
+// 容易混淆,默认隐藏;开关存 localStorage 跨刷新保留。
+const SYSTEM_OB_TYPES = ['direct', 'block', 'dns']
+const SHOW_SYS_KEY = 'outbounds.showSystem'
+const showSystem = ref<boolean>(localStorage.getItem(SHOW_SYS_KEY) === '1')
+watch(showSystem, (v) => localStorage.setItem(SHOW_SYS_KEY, v ? '1' : '0'))
+
+const isSystemOb = (o: any) => SYSTEM_OB_TYPES.includes(o?.type)
+const hiddenSysCount = computed(() => showSystem.value ? 0 : outbounds.value.filter(isSystemOb).length)
+
 const filteredOutbounds = computed(() => {
+  const base = showSystem.value ? outbounds.value : outbounds.value.filter((o: any) => !isSystemOb(o))
   const q = filter.value.trim().toLowerCase()
-  if (!q) return outbounds.value
-  return outbounds.value.filter((o: any) =>
+  if (!q) return base
+  return base.filter((o: any) =>
     (o.tag || '').toLowerCase().includes(q) ||
     (o.type || '').toLowerCase().includes(q) ||
     (o.server || '').toLowerCase().includes(q),
@@ -248,9 +275,9 @@ const outboundTags = computed((): string[] => [
   ...(Data().outbounds?.map((o: Outbound) => o.tag) ?? []),
   ...(Data().endpoints?.map((e: any) => e.tag) ?? []),
 ])
-const onlines = computed(() => Data().onlines.outbound ?? [])
-
-const onlineCount = computed(() => outbounds.value.filter((o: any) => onlines.value.includes(o.tag)).length)
+// 注:出站场景不再展示 onlines —— 它表达"近期有流量",不是"能连通",
+// 在添加测试节点时全部显示离线但其实能用,严重误导。延迟列(checkOutbound)
+// 才是真实的"能拨通 + 密钥对 + 协议握手成功"。入站列表才该显示在线。
 const passCount = computed(() =>
   Object.values(checkResults.value).filter((r) => !r.loading && r.success).length,
 )
@@ -281,6 +308,72 @@ const showStats = (tag: string) => {
   stats.value.visible = true
 }
 const closeStats = () => { stats.value.visible = false }
+
+// ---------- 自动探测(在线状态 + 延迟,10s/轮) ----------
+// 每轮:
+//   1) 触发增量 loadData → 刷 onlines(后端 push 在线列表)
+//   2) 对当前可见出站(filteredOutbounds)发 checkOutbound,4 路并发上限
+//      免得机场上百节点一次打爆 sing-box dial pool。
+// 暂停:autoProbe=false / 页面卸载 / 上一轮还没完(避免重叠)
+const PROBE_INTERVAL_MS = 10000
+const PROBE_CONCURRENCY = 4
+const PROBE_KEY = 'outbounds.autoProbe'
+const autoProbe = ref<boolean>(localStorage.getItem(PROBE_KEY) !== '0')
+watch(autoProbe, (v) => localStorage.setItem(PROBE_KEY, v ? '1' : '0'))
+
+const nextProbeIn = ref(PROBE_INTERVAL_MS / 1000)
+let probeRunning = false
+let probeTimer: number | null = null
+let tickTimer: number | null = null
+
+const probeOnce = async () => {
+  if (probeRunning) return
+  probeRunning = true
+  try {
+    // 只测延迟 — 不再调 Data().loadData()(那会整体替换 outbounds 数组,
+    // 触发 el-table 全列重渲染,体感"在跳")。延迟探测走 in-place update,
+    // table 行不会重建。
+    const targets = filteredOutbounds.value.filter((o: any) => o?.tag && !checkResults.value[o.tag]?.loading)
+    if (targets.length === 0) return
+    // 4 路并发滑窗,免一次性 100+ dial 打爆 sing-box
+    let i = 0
+    const next = async () => {
+      while (i < targets.length) {
+        const idx = i++
+        await checkOutbound(targets[idx].tag)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, targets.length) }, () => next()))
+  } finally {
+    probeRunning = false
+  }
+}
+
+const startProbe = () => {
+  stopProbe()
+  // 立刻先来一轮,免得用户进页面要等 10s 才有数据
+  probeOnce()
+  nextProbeIn.value = PROBE_INTERVAL_MS / 1000
+  probeTimer = window.setInterval(() => {
+    probeOnce()
+    nextProbeIn.value = PROBE_INTERVAL_MS / 1000
+  }, PROBE_INTERVAL_MS)
+  tickTimer = window.setInterval(() => {
+    if (nextProbeIn.value > 0) nextProbeIn.value -= 1
+  }, 1000)
+}
+
+const stopProbe = () => {
+  if (probeTimer !== null) { window.clearInterval(probeTimer); probeTimer = null }
+  if (tickTimer !== null) { window.clearInterval(tickTimer); tickTimer = null }
+}
+
+watch(autoProbe, (v) => { v ? startProbe() : stopProbe() })
+
+onMounted(() => {
+  if (autoProbe.value) startProbe()
+})
+onBeforeUnmount(stopProbe)
 </script>
 
 <style scoped>
@@ -314,6 +407,27 @@ const closeStats = () => { stats.value.visible = false }
 }
 .ob-stat--ok { color: var(--nc-success); }
 .ob-stat--err { color: var(--nc-danger); }
+.ob-stat--muted { color: var(--nc-text-muted); font-style: italic; }
+.ob-stat--switch { display: inline-flex; align-items: center; cursor: help; }
+.ob-probe-tick { margin-left: 6px; font-size: 11px; color: var(--nc-text-muted); min-width: 28px; text-align: right; }
+
+/* 延迟 cell:整格可点触发重测 */
+.delay-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  color: var(--nc-text-muted);
+}
+.delay-cell.is-clickable { cursor: pointer; transition: background-color 0.12s; }
+.delay-cell.is-clickable:hover { background-color: var(--nc-primary-soft); color: var(--nc-primary); }
+
+/* 操作组紧凑 */
+.ob-actions { display: inline-flex; gap: 2px; justify-content: center; }
+.ob-actions .el-button { padding: 4px 6px !important; height: auto !important; }
 
 .ob-table { background: var(--nc-surface); }
 .ob-table :deep(.el-table__row) td { vertical-align: middle; }

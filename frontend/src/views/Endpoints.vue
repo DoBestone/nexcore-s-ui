@@ -187,19 +187,21 @@ const quickRegisterWarp = async () => {
 }
 
 // ---------- 一键 Tailscale ----------
+// 不再写 domain_resolver:'local' — sing-box 1.13 该 tag 不存在(用 'dns-local')。
+// 旧版还有一个隐藏 bug:Endpoint modal 在 id==0 时硬编码 wireguard,把这里
+// 的 data 完全吞掉,导致点完一键 Tailscale 看到的反而是 WG 表单。modal 已修。
 const addTailscaleTemplate = () => {
   const tag = `ts-${Math.random().toString(36).slice(2, 6)}`
   modal.value.id = 0
   modal.value.data = JSON.stringify({
     type: 'tailscale',
     tag,
-    domain_resolver: 'local',
     auth_key: '',
     hostname: '',
     accept_routes: true,
   })
   modal.value.visible = true
-  ElMessage.info('已生成 Tailscale 模板，请在弹窗中填入 auth_key 后保存')
+  ElMessage.info('已生成 Tailscale 模板,请在弹窗中填入 auth_key 后保存')
 }
 </script>
 

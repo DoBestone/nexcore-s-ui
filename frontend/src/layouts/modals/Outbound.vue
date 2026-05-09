@@ -31,6 +31,17 @@
     </div>
 
     <el-form :model="outbound" label-position="top" class="ob-form">
+      <!-- 快速套餐:只在「新增」时显示。一键填全 type+TLS+transport+ALPN+utls 指纹 -->
+      <div v-if="title === 'add'" class="quick-presets">
+        <span class="quick-presets__label">
+          <el-icon><MagicStick /></el-icon>快速套餐
+        </span>
+        <el-button size="small" plain @click="applyPreset('vless-vision')">VLESS+Vision+TLS</el-button>
+        <el-button size="small" plain @click="applyPreset('vmess-ws-tls')">VMess+WS+TLS(套 CDN)</el-button>
+        <el-button size="small" plain @click="applyPreset('trojan-grpc-tls')">Trojan+gRPC+TLS</el-button>
+        <el-button size="small" plain @click="applyPreset('hysteria2')">Hysteria2(QUIC)</el-button>
+      </div>
+
       <!-- 基础四件套 -->
       <div class="form-grid">
         <el-form-item :label="$t('type')">
@@ -181,7 +192,10 @@
       <!-- TLS -->
       <div v-if="supportsTls" class="form-section">
         <div class="form-section__head">
-          <h4 class="form-section__title">TLS</h4>
+          <div class="form-section__head-left">
+            <h4 class="form-section__title">TLS</h4>
+            <p class="form-section__hint">加密层 · VLESS+Vision / Trojan 必开 · VMess 套 CDN 必开 · 裸 VMess/SS 可关</p>
+          </div>
           <el-switch v-model="tlsEnabled" />
         </div>
         <div v-if="tlsEnabled" class="form-grid">
@@ -217,16 +231,41 @@
         </div>
       </div>
 
-      <!-- Transport -->
-      <div v-if="supportsTransport" class="form-section">
+      <!-- Transport(永远显示,不支持的协议显示解释卡片而不是隐藏) -->
+      <div class="form-section">
         <div class="form-section__head">
-          <h4 class="form-section__title">传输层(Transport)</h4>
-          <el-select v-model="transportType" size="small" style="width: 140px">
+          <div class="form-section__head-left">
+            <h4 class="form-section__title">传输层(Transport)</h4>
+            <p class="form-section__hint">
+              v2ray 风格的伪装层 — 把代理流量再包一层 WS / gRPC / HTTP,墙看起来就是普通 web。
+              <b>WS+TLS</b> 可套 Cloudflare CDN 隐藏源 IP;<b>gRPC+TLS</b> 走 h2 长连接抗丢包。不开 = 裸 TCP,易被 SNI 阻断。
+            </p>
+          </div>
+          <el-select v-if="supportsTransport" v-model="transportType" size="small" style="width: 140px">
             <el-option label="(裸 TCP)" value="" />
             <el-option v-for="(v, k) in TrspTypes" :key="k" :label="k" :value="v" />
           </el-select>
         </div>
-        <div v-if="transportType" class="form-grid">
+        <!-- 不支持 transport 的协议:显示原因,不让用户误以为 UI 缺失 -->
+        <div v-if="!supportsTransport" class="transport-unsupported">
+          <el-icon><InfoFilled /></el-icon>
+          <span v-if="['hysteria','hysteria2','tuic'].includes(outbound.type)">
+            <b>{{ outbound.type }}</b> 是 QUIC 协议,传输层已经内置在 QUIC/TLS 1.3 里,不需要额外的 v2ray transport
+          </span>
+          <span v-else-if="outbound.type === 'shadowtls'">
+            <b>shadowtls</b> 自身就是一层 TLS 伪装包装,不再叠加 transport
+          </span>
+          <span v-else-if="outbound.type === 'naive'">
+            <b>naive</b> 自己用 HTTP/2 + TLS 包装,不需要额外 transport
+          </span>
+          <span v-else-if="['shadowsocks','socks','http','ssh','wireguard'].includes(outbound.type)">
+            <b>{{ outbound.type }}</b> 协议不支持 v2ray transport(sing-box 上游限制)。要套 CDN 请改用 vmess / vless / trojan
+          </span>
+          <span v-else>
+            该协议类型不支持 v2ray transport
+          </span>
+        </div>
+        <div v-if="supportsTransport && transportType" class="form-grid">
           <template v-if="transportType === 'ws'">
             <el-form-item label="Path">
               <el-input v-model="outbound.transport.path" placeholder="/" class="mono" />
@@ -299,7 +338,7 @@ import RandomUtil from '@/plugins/randomUtil'
 import HttpUtils from '@/plugins/httputil'
 import Data from '@/store/modules/data'
 import { ElMessage } from 'element-plus'
-import { Refresh, RefreshRight, Link } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, Link, InfoFilled, MagicStick } from '@element-plus/icons-vue'
 
 const props = defineProps<{ visible: boolean; data: string; id: number; tags: string[] }>()
 const emit = defineEmits<{ close: []; 'update:modelValue': [v: boolean] }>()
@@ -416,7 +455,10 @@ const updateData = (id: number) => {
     outbound.value = createOutbound(newData.type, newData)
     title.value = 'edit'
   } else {
-    outbound.value = createOutbound('direct', { tag: 'direct-' + RandomUtil.randomSeq(3) })
+    // 默认 vless 而不是 direct:机场场景几乎不在「出站管理」加 direct
+    // (direct 由 ensureDirectOutbound 自动补);默认 vless 让用户打开就
+    // 看到 TLS / Transport 区域,免得以为面板缺字段。
+    outbound.value = createOutbound('vless', { tag: 'vless-' + RandomUtil.randomSeq(3) })
     title.value = 'add'
   }
   link.value = ''
@@ -433,6 +475,48 @@ const changeType = () => {
   }
   outbound.value = createOutbound(outbound.value.type, prev)
   refreshJson()
+}
+
+// 快速套餐:一键写好 type + TLS + transport + ALPN + utls 指纹,
+// 用户只剩 server / port / uuid / password 这些必填项。
+// 跟 CF wizard 的默认参数对齐(utls fingerprint 用 chrome,ALPN 按协议匹配)
+const applyPreset = (key: string) => {
+  const tag = key + '-' + RandomUtil.randomSeq(3)
+  switch (key) {
+    case 'vless-vision':
+      outbound.value = createOutbound('vless', {
+        tag,
+        flow: 'xtls-rprx-vision',
+        // VLESS+Vision 主流方案 ALPN 一般不写;sing-box 跟随
+        tls: { enabled: true, utls: { enabled: true, fingerprint: 'chrome' } },
+        transport: undefined,
+      } as any)
+      break
+    case 'vmess-ws-tls':
+      outbound.value = createOutbound('vmess', {
+        tag,
+        security: 'auto',
+        tls: { enabled: true, alpn: ['h2', 'http/1.1'], utls: { enabled: true, fingerprint: 'chrome' } },
+        transport: { type: 'ws', path: '/ws' },
+      } as any)
+      break
+    case 'trojan-grpc-tls':
+      outbound.value = createOutbound('trojan', {
+        tag,
+        tls: { enabled: true, alpn: ['h2'], utls: { enabled: true, fingerprint: 'chrome' } },
+        transport: { type: 'grpc', service_name: 'grpc' },
+      } as any)
+      break
+    case 'hysteria2':
+      outbound.value = createOutbound('hysteria2', {
+        tag,
+        // QUIC 自带传输层,不需要 transport;ALPN 由 hysteria2 协议自管
+        tls: { enabled: true },
+      } as any)
+      break
+  }
+  refreshJson()
+  ElMessage.success(`已套用「${key}」预设,补完 server / port / uuid / password 即可保存`)
 }
 
 const genUuid = () => {
@@ -531,6 +615,50 @@ watch(() => props.visible, (v) => {
   font-weight: 600;
   color: var(--nc-text-1);
   letter-spacing: 0.02em;
+}
+.form-section__head-left { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.form-section__hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--nc-text-muted);
+  line-height: 1.5;
+}
+.form-section__hint b { color: var(--nc-text-1); font-weight: 600; }
+
+.transport-unsupported {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--nc-bg-2, #f8fafc);
+  border: 1px dashed var(--nc-border-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--nc-text-muted);
+  line-height: 1.55;
+}
+.transport-unsupported .el-icon { color: var(--nc-primary); flex-shrink: 0; margin-top: 2px; }
+.transport-unsupported b { color: var(--nc-text-1); font-weight: 600; }
+
+.quick-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), transparent);
+  border: 1px dashed rgba(124, 58, 237, 0.4);
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+}
+.quick-presets__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #7c3aed;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
 }
 
 .form-subsection {

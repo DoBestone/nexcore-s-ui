@@ -129,6 +129,8 @@ func (s *ClientService) Save(tx *gorm.DB, act string, data json.RawMessage, host
 		if err != nil {
 			return nil, err
 		}
+		// 收集 client name 用于后续清 stats
+		var clientNames []string
 		for _, id := range ids {
 			var client model.Client
 			err = tx.Where("id = ?", id).First(&client).Error
@@ -141,10 +143,19 @@ func (s *ClientService) Save(tx *gorm.DB, act string, data json.RawMessage, host
 				return nil, err
 			}
 			inboundIds = common.UnionUintArray(inboundIds, clientInbounds)
+			if client.Name != "" {
+				clientNames = append(clientNames, client.Name)
+			}
 		}
 		err = tx.Where("id in ?", ids).Delete(model.Client{}).Error
 		if err != nil {
 			return nil, err
+		}
+		// 同 case "del":清 stats 表 user 累加,免重建同名时混入旧流量
+		if len(clientNames) > 0 {
+			if err = tx.Where("resource = ? AND tag IN ?", "user", clientNames).Delete(&model.Stats{}).Error; err != nil {
+				return nil, err
+			}
 		}
 	case "del":
 		var id uint
@@ -163,6 +174,12 @@ func (s *ClientService) Save(tx *gorm.DB, act string, data json.RawMessage, host
 		}
 		err = tx.Where("id = ?", id).Delete(model.Client{}).Error
 		if err != nil {
+			return nil, err
+		}
+		// 清掉 stats 表里 user 资源下这个 client name 的累加流量样本,
+		// 免重建同名客户端时新流量混旧流量。client 表本身已删,client.up/down
+		// 的累加也跟着没了,这里只剩 stats 表要补一刀。
+		if err = tx.Where("resource = ? AND tag = ?", "user", client.Name).Delete(&model.Stats{}).Error; err != nil {
 			return nil, err
 		}
 	default:
@@ -189,6 +206,10 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 			return err
 		}
 	}
+	// 链接 add 字段来源策略 — settings.linkAddrSource("panel" / "tls"),
+	// genLink 内部按此决定 add 字段(单独 SettingService 实例,免每个 inbound
+	// 重复 SQL 查询)。
+	addrSource := (&SettingService{}).GetLinkAddrSource()
 	for index, client := range clients {
 		var clientLinks []map[string]string
 		err = json.Unmarshal(client.Links, &clientLinks)
@@ -198,7 +219,7 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 
 		newClientLinks := []map[string]string{}
 		for _, inbound := range inbounds {
-			newLinks := util.LinkGenerator(client.Config, &inbound, hostname)
+			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource)
 			for _, newLink := range newLinks {
 				newClientLinks = append(newClientLinks, map[string]string{
 					"remark": inbound.Tag,
@@ -235,6 +256,7 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 	if err != nil {
 		return err
 	}
+	addrSource := (&SettingService{}).GetLinkAddrSource()
 	for _, client := range clients {
 		// Add inbounds
 		var clientInbounds []uint
@@ -247,7 +269,7 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 		// Add links
 		var clientLinks, newClientLinks []map[string]string
 		json.Unmarshal(client.Links, &clientLinks)
-		newLinks := util.LinkGenerator(client.Config, &inbound, hostname)
+		newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource)
 		for _, newLink := range newLinks {
 			newClientLinks = append(newClientLinks, map[string]string{
 				"remark": inbound.Tag,
@@ -322,6 +344,7 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 
 func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]model.Inbound, hostname string, oldTag string) error {
 	var err error
+	addrSource := (&SettingService{}).GetLinkAddrSource()
 	for _, inbound := range *inbounds {
 		var clientIds []uint
 		err = tx.Raw("SELECT clients.id FROM clients, json_each(clients.inbounds) AS je WHERE je.value = ?", inbound.Id).Scan(&clientIds).Error
@@ -339,7 +362,7 @@ func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]mode
 		for _, client := range clients {
 			var clientLinks, newClientLinks []map[string]string
 			json.Unmarshal(client.Links, &clientLinks)
-			newLinks := util.LinkGenerator(client.Config, &inbound, hostname)
+			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource)
 			for _, newLink := range newLinks {
 				newClientLinks = append(newClientLinks, map[string]string{
 					"remark": inbound.Tag,

@@ -18,7 +18,11 @@ type LinkParam struct {
 	Value string
 }
 
-func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname string) []string {
+// LinkGenerator 生成客户端分享链接。addrSource 决定 add 字段来源:
+// "panel"(默认 / 空) = 用 hostname(panel webDomain / Host)
+// "tls"               = 用 inbound.tls.server_name,通配符回退 hostname
+func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname string, addrSource string) []string {
+	linkAddrSource := addrSource
 	inbound, err := i.MarshalFull()
 	if err != nil {
 		return []string{}
@@ -39,8 +43,22 @@ func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname stri
 		return []string{}
 	}
 	if len(Addrs) == 0 {
+		// server 字段是客户端实际 dial 的目标 — 必须 DNS 解析到本机公网 IP。
+		// 来源由 settings.linkAddrSource 控制:
+		//   "panel"(默认) → hostname(panel webDomain / Host),DNS 必通
+		//   "tls"          → inbound.tls.server_name,通配符 *.x.example
+		//                    回退 hostname。需要管理员自己保证每个 server_name
+		//                    在 DNS 里有 A 记录指向本机公网 IP。
+		// 旧版无脑用 server_name 导致用户证书签好但 add 域名解析到别处,代理
+		// 跑不通。改成可配置,默认 panel 最稳。
+		serverField := hostname
+		if linkAddrSource == "tls" && i.TlsId > 0 {
+			if sn, ok := tls["server_name"].(string); ok && sn != "" && !strings.HasPrefix(sn, "*.") {
+				serverField = sn
+			}
+		}
 		Addrs = append(Addrs, map[string]interface{}{
-			"server":      hostname,
+			"server":      serverField,
 			"server_port": (*inbound)["listen_port"],
 			"remark":      i.Tag,
 		})

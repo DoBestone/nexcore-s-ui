@@ -3,7 +3,7 @@
     <div class="page-header with-actions">
       <div class="page-header-text">
         <h2 class="page-title">{{ $t('pages.dns') }}</h2>
-        <p class="page-desc">DNS 服务器、规则与策略 — 不懂可直接打开下方推荐项的开关</p>
+        <p class="page-desc">DNS 服务器、规则与策略 — 不懂可直接点「一键推荐参数」自动套用机场最优栈;下方所有开关切换即保存生效</p>
       </div>
       <div class="page-header-actions">
         <el-button @click="applyRecommendedParams">
@@ -25,7 +25,7 @@
     <div class="nc-card preset-card">
       <div class="preset-head">
         <h4 class="section-title">推荐 DNS 服务器</h4>
-        <span class="preset-hint">打开即自动加入配置 · 关闭即移除</span>
+        <span class="preset-hint">切换即自动保存并热载 sing-box</span>
       </div>
       <div class="preset-grid">
         <div v-for="p in serverPresets" :key="p.tag" class="preset-item">
@@ -47,7 +47,7 @@
     <div class="nc-card preset-card">
       <div class="preset-head">
         <h4 class="section-title">推荐 DNS 规则</h4>
-        <span class="preset-hint">打开即自动加入配置 · 关闭即移除</span>
+        <span class="preset-hint">切换即自动保存并热载 sing-box</span>
       </div>
       <div class="preset-grid">
         <div v-for="p in rulePresets" :key="p.key" class="preset-item">
@@ -392,7 +392,10 @@ const tsTags = computed(() => Data().endpoints?.filter((e: any) => e.type === 't
 const clients = computed(() => Data().clients?.map((c: any) => c.name) ?? [])
 const stateChange = computed(() => FindDiff.deepCompare(appConfig.value.dns, oldConfig.value.dns))
 
-const saveConfig = async () => {
+// 共享保存:开关切换 / 一键推荐 / modal 提交 / 删除拖拽,都走它。
+// 文本输入(strategy / cache_capacity / client_subnet …)频繁 keystroke,
+// 仍走头部「保存」按钮,避免每个键打到后端 sing-box reload。
+const autoSave = async (label?: string): Promise<boolean> => {
   loading.value = true
   // 保存前自检:确保配置自洽
   // 1) DNS 规则引用的 rule_set 必须注册到 route.rule_set
@@ -403,9 +406,17 @@ const saveConfig = async () => {
     await Data().save('outbounds', 'new', { type: 'direct', tag: 'direct' })
   }
   const success = await Data().save('config', 'set', appConfig.value)
-  if (success) oldConfig.value = JSON.parse(JSON.stringify(Data().config))
+  if (success) {
+    oldConfig.value = JSON.parse(JSON.stringify(Data().config))
+    if (label) ElMessage.success(label)
+  } else if (label) {
+    ElMessage.error('保存失败,sing-box 未重载,请检查日志')
+  }
   loading.value = false
+  return success
 }
+
+const saveConfig = () => autoSave()
 
 const inboundTags = computed(() => [
   ...(Data().inbounds?.map((o: any) => o.tag) ?? []),
@@ -507,9 +518,15 @@ const toggleServer = async (p: ServerPreset, on: boolean) => {
     if (idx === -1) dns.value.servers.push(p.build())
   } else {
     if (idx >= 0) dns.value.servers.splice(idx, 1)
-    // 同步关闭依赖此服务器的规则
+    // 同步关闭依赖此服务器的规则(toggleRule 自身会触发 autoSave,这里
+    // 用 in-place 删除,只在最末统一 autoSave 一次,免重复 reload)
+    const cascadeKeys: string[] = []
     for (const rp of rulePresets) {
-      if (rp.requires?.includes(p.tag) && isRuleEnabled(rp.key)) await toggleRule(rp, false)
+      if (rp.requires?.includes(p.tag) && isRuleEnabled(rp.key)) {
+        const rIdx = dns.value.rules.findIndex(rp.match)
+        if (rIdx >= 0) dns.value.rules.splice(rIdx, 1)
+        cascadeKeys.push(rp.key)
+      }
     }
     if (dns.value.final === p.tag) dns.value.final = undefined
     // 关闭 dns-local 时检查:还有别的服务器引用它吗?
@@ -521,7 +538,9 @@ const toggleServer = async (p: ServerPreset, on: boolean) => {
         ElMessage.warning('其它 DoH 服务器仍依赖 dns-local,已自动保留')
       }
     }
+    if (cascadeKeys.length) ElMessage.info(`级联关闭依赖规则:${cascadeKeys.join('、')}`)
   }
+  await autoSave(on ? `已启用 ${p.name} 并保存` : `已停用 ${p.name} 并保存`)
 }
 
 // ---------- 推荐 DNS 规则（开关即用） ----------
@@ -573,9 +592,11 @@ const rulePresets: RulePreset[] = [
   {
     key: 'reject-private',
     name: '拒绝解析私有地址',
-    desc: '查询解析到内网 IP（10.x / 192.168.x）时直接拒绝，防 DNS 重绑定攻击',
-    iconText: '🛡',
-    color: '#7c3aed',
+    desc: '⚠ sing-box 1.13 已知冲突:开启后 rule_set 下载会被 reject 导致核心起不来。如要防 DNS 重绑定,改去路由层加 ip_cidr 黑名单。',
+    iconText: '⚠',
+    color: '#94a3b8',
+    badge: '不推荐',
+    badgeType: 'warning',
     match: (r: any) => r?.action === 'reject' && r?.ip_is_private === true,
     build: () => ({ ip_is_private: true, action: 'reject' }),
   },
@@ -635,18 +656,47 @@ const toggleRule = async (p: RulePreset, on: boolean) => {
     if (idx >= 0) dns.value.rules.splice(idx, 1)
     // rule_set 资源保留不删 — 可能被其他地方引用，由用户在「路由列表」手动清理
   }
+  await autoSave(on ? `已启用规则「${p.name}」并保存` : `已停用规则「${p.name}」并保存`)
 }
 
 // ---------- 一键推荐参数 ----------
-const applyRecommendedParams = () => {
+// 完整商业机场最优栈:国外 DoH(Cloudflare) + 国内 DoH(阿里) + 国内分流
+// + 防 DNS 重绑定 + 客户端缓存,做完即直接 autoSave 推到 sing-box。
+const applyRecommendedParams = async () => {
+  loading.value = true
+  if (!dns.value.servers) dns.value.servers = []
+  if (!dns.value.rules) dns.value.rules = []
+
+  // 1. 启用国外 + 国内 DoH(自动联动 dns-local 给 DoH 自身的域名做解析)
+  for (const tag of ['dns-cf', 'dns-ali']) {
+    const p = serverPresets.find((x) => x.tag === tag)!
+    if (!isServerEnabled(tag)) {
+      ensureDnsLocal()
+      dns.value.servers.push(p.build())
+    }
+  }
+
+  // 2. 启用核心规则:仅国内域名走阿里(避免国外 DoH 给 CDN 调度错地方)。
+  //    reject-private(ip_is_private)在 sing-box 1.13 里会阻塞 rule_set
+  //    下载链(geosite-cn 拉不到 → 整个 sing-box 启动失败),不放进一键推荐。
+  for (const key of ['cn-to-ali']) {
+    const r = rulePresets.find((x) => x.key === key)
+    if (!r || isRuleEnabled(key)) continue
+    if (r.ruleSets?.length) await ensureRuleSet(r.ruleSets)
+    dns.value.rules.push(r.build())
+  }
+
+  // 3. 客户端参数(sing-box 1.13 schema)
   dns.value.strategy = 'prefer_ipv4'
   dns.value.cache_capacity = 4096
   dns.value.disable_cache = false
   dns.value.disable_expire = false
   dns.value.independent_cache = true
   dns.value.reverse_mapping = true
-  if (!dns.value.final && isServerEnabled('dns-cf')) dns.value.final = 'dns-cf'
-  ElMessage.success('已套用商业机场推荐参数（prefer_ipv4 / 缓存 4096 / 独立缓存 / 反向映射）')
+  if (!dns.value.final) dns.value.final = 'dns-cf'
+
+  // 4. 落库 + sing-box 重载
+  await autoSave('已套用机场最优 DNS 栈并自动保存:Cloudflare + 阿里 DoH · 国内域名走阿里 · 缓存 4096 · sing-box 已重载')
 }
 
 // ---------- 自定义 modal 编辑 ----------
@@ -657,12 +707,19 @@ const showDnsModal = (index: number) => {
   dnsModal.value.visible = true
 }
 const closeDnsModal = () => { dnsModal.value.visible = false }
-const saveDnsModal = (data: any) => {
+const saveDnsModal = async (data: any) => {
   if (dnsModal.value.index === -1) dns.value.servers.push(data)
   else dns.value.servers[dnsModal.value.index] = data
   dnsModal.value.visible = false
+  await autoSave(dnsModal.value.index === -1 ? '已新增 DNS 服务器并保存' : '已更新 DNS 服务器并保存')
 }
-const delDns = (index: number) => { dns.value.servers.splice(index, 1) }
+const delDns = async (index: number) => {
+  const tag = dns.value.servers[index]?.tag
+  dns.value.servers.splice(index, 1)
+  // final 指向被删的服务器时清空,否则 sing-box 启动失败
+  if (tag && dns.value.final === tag) dns.value.final = undefined
+  await autoSave('已删除 DNS 服务器并保存')
+}
 
 const dnsRuleModal = ref({ visible: false, index: -1, data: '' })
 const showDnsRuleModal = (index: number) => {
@@ -671,21 +728,26 @@ const showDnsRuleModal = (index: number) => {
   dnsRuleModal.value.visible = true
 }
 const closeDnsRuleModal = () => { dnsRuleModal.value.visible = false }
-const saveDnsRuleModal = (data: dnsRule) => {
+const saveDnsRuleModal = async (data: dnsRule) => {
   if (dnsRuleModal.value.index === -1) dnsRules.value.push(data)
   else dnsRules.value[dnsRuleModal.value.index] = data
   dnsRuleModal.value.visible = false
+  await autoSave(dnsRuleModal.value.index === -1 ? '已新增 DNS 规则并保存' : '已更新 DNS 规则并保存')
 }
-const delDnsRule = (index: number) => { dnsRules.value.splice(index, 1) }
+const delDnsRule = async (index: number) => {
+  dnsRules.value.splice(index, 1)
+  await autoSave('已删除 DNS 规则并保存')
+}
 
 const draggedItemIndex = ref<number | null>(null)
 const onDragStart = (index: number) => { draggedItemIndex.value = index }
-const onDrop = (index: number) => {
+const onDrop = async (index: number) => {
   if (draggedItemIndex.value !== null) {
     const dragged = dnsRules.value[draggedItemIndex.value]
     dnsRules.value.splice(draggedItemIndex.value, 1)
     dnsRules.value.splice(index, 0, dragged)
     draggedItemIndex.value = null
+    await autoSave('已调整规则顺序并保存')
   }
 }
 </script>

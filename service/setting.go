@@ -56,6 +56,16 @@ var defaultValueMap = map[string]string{
 	"timeLocation":  "UTC",
 	"config":        defaultConfig,
 	"version":       config.GetVersion(),
+	// 节点名称:多机管理时给每台机一个 nickname,显示在前端侧边栏 logo
+	// 下方,方便区分。空值时不显示。
+	"nodeName": "",
+	// 客户端分享链接 add 字段的来源:
+	//   panel  (默认) — 用 panel webDomain / Host header(管理员能保证 DNS 通)
+	//   tls    — 用 inbound TLS server_name(签证书的域名,但 DNS 不一定通)
+	// 用户报"add 用 server_name 域名导致连不上"的根因是 server_name 没 DNS 记录,
+	// 默认 panel 模式让所有 inbound 共用面板域名,DNS 必通。要每入站独立分享域名
+	// 改 tls,自行确保每个 server_name 有对应 A 记录。
+	"linkAddrSource": "panel",
 }
 
 type SettingService struct {
@@ -200,6 +210,17 @@ func (s *SettingService) setInt(key string, value int) error {
 }
 func (s *SettingService) GetListen() (string, error) {
 	return s.getString("webListen")
+}
+
+// GetLinkAddrSource 返回客户端分享链接 add 字段的来源策略:
+// "panel"(默认)= 用 webDomain / Host;"tls" = 用 inbound TLS server_name。
+// 取错或空一律 fallback "panel"(最稳)。
+func (s *SettingService) GetLinkAddrSource() string {
+	v, _ := s.getString("linkAddrSource")
+	if v == "tls" {
+		return "tls"
+	}
+	return "panel"
 }
 
 func (s *SettingService) GetWebDomain() (string, error) {

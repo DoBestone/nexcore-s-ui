@@ -25,7 +25,7 @@
 </template>
 
 <script lang="ts" setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HttpUtils from '@/plugins/httputil'
 import { HumanReadable } from '@/plugins/utils'
 import { i18n } from '@/locales'
@@ -73,12 +73,17 @@ const options = {
   responsive: true,
   maintainAspectRatio: false,
   interaction: { intersect: false, mode: 'index' as const },
-  elements: { point: { pointStyle: 'crossRot' } },
+  // 点默认不画(360 个数据点全画 + crossRot "+" 样式 = 看起来像散点图),
+  // hover 时才露点查具体值。线本身用 dataset.tension/fill 渲染。
+  elements: { point: { radius: 0, hoverRadius: 4, hitRadius: 8 } },
+  // 数据 bucket 没采样(null)时跨过去保持线条连续,免断成小段+孤点。
+  spanGaps: true,
   plugins: {
     legend: { labels: { boxWidth: 10, usePointStyle: true, font: { size: 11 } } },
     tooltip: {
       callbacks: {
-        footer: (items: any[]) => HumanReadable.sizeFormat(items.reduce((acc, c) => acc + c.raw, 0)),
+        // null 用 0 算和,免 NaN
+        footer: (items: any[]) => HumanReadable.sizeFormat(items.reduce((acc, c) => acc + (c.raw ?? 0), 0)),
       },
     },
   },
@@ -118,14 +123,16 @@ const loadData = async () => {
     const downlink: number[] = []
     for (let i = 1; i < 360; i++) {
       labels.push(genLabel(steps[i], l))
+      // reduce 的回调签名是 (acc, curr) → newAcc;旧版只取 (u)=>u 等于
+      // 完全忽略 curr,bucket 内多个样本只取首个,流量图永远偏低。
       const upTraffics = obj
         .filter((o) => o.direction && o.dateTime * 1000 < steps[i] && o.dateTime * 1000 > steps[i - 1])
-        .map((o: any) => o.traffic)
-      const upSum = upTraffics.length > 0 ? upTraffics.reduce((u: number) => u) : (null as any)
+        .map((o: any) => o.traffic as number)
+      const upSum = upTraffics.length > 0 ? upTraffics.reduce((acc: number, curr: number) => acc + curr, 0) : (null as any)
       const downTraffics = obj
         .filter((o) => !o.direction && o.dateTime * 1000 < steps[i] && o.dateTime * 1000 > steps[i - 1])
-        .map((o: any) => o.traffic)
-      const downSum = downTraffics.length > 0 ? downTraffics.reduce((d: number) => d) : (null as any)
+        .map((o: any) => o.traffic as number)
+      const downSum = downTraffics.length > 0 ? downTraffics.reduce((acc: number, curr: number) => acc + curr, 0) : (null as any)
       uplink.push(upSum)
       downlink.push(downSum)
     }
@@ -139,6 +146,7 @@ const loadData = async () => {
           borderWidth: 1.5,
           fill: true,
           tension: 0.25,
+          spanGaps: true,
           data: uplink,
         },
         {
@@ -148,6 +156,7 @@ const loadData = async () => {
           borderWidth: 1.5,
           fill: true,
           tension: 0.25,
+          spanGaps: true,
           data: downlink,
         },
       ],
@@ -166,24 +175,28 @@ const genLabel = (step: number, l: string) =>
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   })
 
-watch(() => props.visible, (v) => {
-  if (v) {
-    limit.value = 1
-    loadData()
-    intervalId = setInterval(loadData, 10000)
-  } else {
-    loaded.value = false
-    alert.value = false
-    if (intervalId) {
-      clearInterval(intervalId)
-      intervalId = null
-    }
-  }
-})
+// 启动一次 loadData + 周期 interval。watch + onMounted 都用同一个入口,
+// 避免重复 interval 注册。
+const startLoading = () => {
+  if (intervalId) { clearInterval(intervalId); intervalId = null }
+  limit.value = 1
+  loadData()
+  intervalId = setInterval(loadData, 10000)
+}
+const stopLoading = () => {
+  loaded.value = false
+  alert.value = false
+  if (intervalId) { clearInterval(intervalId); intervalId = null }
+}
 
-onBeforeUnmount(() => {
-  if (intervalId) clearInterval(intervalId)
-})
+watch(() => props.visible, (v) => { v ? startLoading() : stopLoading() })
+
+// onMounted 兜底:调用方用 v-if 渲染 modal 时(InboundClients / Endpoints /
+// Outbounds 都是 v-if + visible=true 同时上),组件首次挂载 props.visible
+// 已经是 true,但 watch 没 immediate → 永远不触发 → 图表永远空白。
+onMounted(() => { if (props.visible) startLoading() })
+
+onBeforeUnmount(() => { if (intervalId) clearInterval(intervalId) })
 </script>
 
 <style scoped>

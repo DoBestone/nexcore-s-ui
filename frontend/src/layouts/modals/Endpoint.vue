@@ -48,10 +48,23 @@ const updateData = (id: number) => {
   if (id > 0) {
     endpoint.value = JSON.parse(props.data)
     title.value = 'edit'
-  } else {
-    endpoint.value = createEndpoint('wireguard', { tag: 'wg-' + RandomUtil.randomSeq(3) } as any)
-    title.value = 'add'
+    return
   }
+  title.value = 'add'
+  // 新增分支:如果调用方塞了模板(如「一键 Tailscale」),用模板初始化;
+  // 否则按默认 wireguard 起。旧代码这里硬写 wireguard,把上层传进来的
+  // 模板 data 完全吞掉,导致一键 Tailscale 看到的永远是 WG 表单。
+  if (props.data) {
+    try {
+      const tmpl = JSON.parse(props.data)
+      const t = tmpl?.type
+      if (t && (EpTypes as any)[Object.keys(EpTypes).find((k: string) => (EpTypes as any)[k] === t) ?? '']) {
+        endpoint.value = createEndpoint(t, tmpl as any)
+        return
+      }
+    } catch { /* fall through to wireguard default */ }
+  }
+  endpoint.value = createEndpoint('wireguard', { tag: 'wg-' + RandomUtil.randomSeq(3) } as any)
 }
 
 const changeType = () => {

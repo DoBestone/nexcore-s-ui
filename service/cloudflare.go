@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alireza0/s-ui/database"
@@ -201,6 +202,57 @@ func (s *CloudflareService) zoneName(token, zoneId string) (string, error) {
 	return z.Name, nil
 }
 
+// DetectPublicIP 在「服务器」上向多个 echo-IP 服务并发查询,返回第一个成功的。
+// 必须在后端跑 — 前端 fetch 拿到的是用户浏览器的出口 IP,不是面板服务器的
+// 公网 IP,签到 DNS 上是错的。
+func (s *CloudflareService) DetectPublicIP() string {
+	apis := []string{
+		"https://api64.ipify.org",
+		"https://ip.sb",
+		"https://icanhazip.com",
+		"https://ipinfo.io/ip",
+		"https://checkip.amazonaws.com",
+	}
+	type result struct {
+		ip  string
+		err error
+	}
+	ch := make(chan result, len(apis))
+	var wg sync.WaitGroup
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	for _, api := range apis {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			resp, err := client.Get(url)
+			if err != nil {
+				ch <- result{"", err}
+				return
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				ch <- result{"", err}
+				return
+			}
+			ch <- result{string(body), nil}
+		}(api)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	for res := range ch {
+		if res.err == nil && res.ip != "" {
+			return strings.TrimSpace(res.ip)
+		}
+	}
+	return ""
+}
+
 // RandomSubdomain 给一个 8 字符 hex 前缀;给运营人员"我懒得想前缀"的快捷出口。
 func (s *CloudflareService) RandomSubdomain(prefix string) string {
 	b := make([]byte, 4)
@@ -224,28 +276,63 @@ func (s *CloudflareService) RandomSubdomain(prefix string) string {
 //   - cfToken: dns01 用的 Cloudflare API Token
 //   - dataDir: ACME 缓存目录(每个 TLS 一个,免冲突)
 func (s *CloudflareService) IssueTLS(name, fqdn, email, cfToken, dataDir string) (uint, error) {
-	if dataDir == "" {
-		dataDir = "./acme/" + fqdn
+	isWildcard := strings.HasPrefix(fqdn, "*.")
+	apex := fqdn
+	if isWildcard {
+		apex = fqdn[2:] // *.jp1.nicevpn.org → jp1.nicevpn.org
 	}
-	server := map[string]interface{}{
-		"enabled":     true,
-		"server_name": fqdn,
-		"alpn":        []string{"h2", "http/1.1"},
-		"acme": map[string]interface{}{
-			"domain":              []string{fqdn},
-			"data_directory":      dataDir,
-			"default_server_name": fqdn,
-			"email":               email,
-			"provider":            "letsencrypt",
-			"dns01_challenge": map[string]interface{}{
-				"provider":  "cloudflare",
-				"api_token": cfToken,
-			},
+
+	if dataDir == "" {
+		// 通配符域名(*.x.example.com)落到 ./acme/_wildcard.x.example.com,
+		// 文件系统不接受 '*' 字符
+		safe := strings.ReplaceAll(fqdn, "*", "_wildcard")
+		dataDir = "./acme/" + safe
+	}
+
+	// ACME 端配置,机场场景默认值:
+	//   - key_type=ec256:ECDSA P-256,握手包减半,代理路径延迟敏感
+	//   - disable_http_challenge / disable_tls_alpn_challenge:已有 DNS-01,
+	//     堵住兜底端口挑战,避免占 80/443 跟入站冲突
+	acme := map[string]interface{}{
+		"domain":                     []string{fqdn},
+		"data_directory":             dataDir,
+		"default_server_name":        apex, // 通配符模式落到 apex,DNS-01 实际用不到
+		"email":                      email,
+		"provider":                   "letsencrypt",
+		"key_type":                   "ec256",
+		"disable_http_challenge":     true,
+		"disable_tls_alpn_challenge": true,
+		"dns01_challenge": map[string]interface{}{
+			"provider":  "cloudflare",
+			"api_token": cfToken,
 		},
 	}
-	clientCfg := map[string]interface{}{
+
+	server := map[string]interface{}{
 		"enabled":     true,
-		"server_name": fqdn,
+		"alpn":        []string{"h2", "http/1.1"},
+		"min_version": "1.3", // 抗主动探测/降版本指纹,2026 没有客户端只能 1.2
+		"acme":        acme,
+	}
+	// 通配符模式不能给 server.server_name 塞 "*.xxx" 字面量(sing-box 当 SNI 字符串
+	// 比对会失败)。留空 → sing-box 接受任意 SNI,用 ClientHello SNI 去 SAN 选证书。
+	// 这正是机场场景"一证多入站不同 SNI"的核心。
+	if !isWildcard {
+		server["server_name"] = fqdn
+	}
+
+	// 客户端默认指纹用 chrome:JA3/JA4 流量分布最大,墙单独识别成本最高。
+	// 用户在编辑器里仍可手动改。通配符模式 client.server_name 留空,
+	// 由每个入站的分享链接生成时填具体子 SNI。
+	clientCfg := map[string]interface{}{
+		"enabled": true,
+		"utls": map[string]interface{}{
+			"enabled":     true,
+			"fingerprint": "chrome",
+		},
+	}
+	if !isWildcard {
+		clientCfg["server_name"] = fqdn
 	}
 
 	srvBytes, err := json.Marshal(server)
@@ -266,9 +353,39 @@ func (s *CloudflareService) IssueTLS(name, fqdn, email, cfToken, dataDir string)
 		Client: cliBytes,
 	}
 
+	// 必须用事务包 Create + Changes + LastUpdate,跟 ConfigService.Save 一致。
+	// 否则 api/load 的增量(CheckChanges 看 model.Changes)拿不到这条新 TLS,
+	// 前端 store 里 tlsConfigs 不会刷新,入站编辑页 TLS 下拉就是空的。
 	db := database.GetDB()
-	if err := db.Create(&tls).Error; err != nil {
+	tx := db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+	if err := tx.Create(&tls).Error; err != nil {
+		tx.Rollback()
 		return 0, err
 	}
+	dt := time.Now().Unix()
+	chgPayload, _ := json.Marshal(map[string]interface{}{
+		"id":   tls.Id,
+		"name": tls.Name,
+		"src":  "cloudflare-wizard",
+	})
+	if err := tx.Create(&model.Changes{
+		DateTime: dt,
+		Actor:    "cf-wizard",
+		Key:      "tls",
+		Action:   "new",
+		Obj:      chgPayload,
+	}).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	LastUpdate = dt
 	return tls.Id, nil
 }

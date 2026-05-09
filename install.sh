@@ -6,6 +6,13 @@
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) v1.0.0
 #   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) --force
+#   bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) --help
+#
+# 默认:
+#   - 端口随机生成(10000-60000,且检测端口未被占用)
+#   - 面板路径随机生成(16 字符 url-safe slug)
+#   - 启用 --secure-entry 时 slug 升级为 32 字符
+#   - 用 --fixed 回退到老默认 3095 / /app/
 #
 # 与上游 alireza0/s-ui 完全独立,可在同一台机器共存:
 #   - 安装目录    /usr/local/nexcore-s-ui/      (上游是 /usr/local/s-ui/)
@@ -13,12 +20,12 @@
 #   - CLI 命令    /usr/bin/nexcore-s-ui         (上游是 /usr/bin/s-ui)
 #   - 数据库      /usr/local/nexcore-s-ui/db/nexcore-s-ui.db
 #                                               (上游是 /usr/local/s-ui/db/s-ui.db)
-#   - 默认端口    面板 3095 / 订阅 3096        (上游是 2095 / 2096)
 #
 # 可覆盖默认值的环境变量:
 #   GH_OWNER  GH_REPO  INSTALL_DIR  PKG_PREFIX  CMD_NAME  SERVICE_NAME
+#   PANEL_PORT  PANEL_PATH  SECURE_ENTRY  SECURE_ENTRY_PATH  USE_FIXED_DEFAULT
 #
-# 首装全自动随机凭据,装完立即 echo 出用户名/密码/面板 URI。
+# 首装全自动随机凭据 + 随机端口 + 随机 path,装完立即 echo 出全部信息。
 
 set -eo pipefail
 
@@ -40,11 +47,75 @@ DB_PATH="${INSTALL_DIR}/db/${CMD_NAME}.db"
 
 FORCE=false
 TARGET_VERSION=""
+# 安装期可定制的面板首装参数。空值 = 走"安全随机"路径(见 apply_initial_settings)。
+# CLI 参数和 ENV 变量等价,CLI 优先(ENV 是 fallback)。
+PANEL_PORT="${PANEL_PORT:-}"
+PANEL_PATH="${PANEL_PATH:-}"
+# --secure-entry:打开 = path 用更长 slug(32 字符)+ 显式 echo 警告"务必记录"。
+# --secure-entry=mySlug:用指定 slug,跳过随机化(自定义安全入口)。
+SECURE_ENTRY="${SECURE_ENTRY:-}"
+SECURE_ENTRY_PATH="${SECURE_ENTRY_PATH:-}"
+# --fixed:用老默认值(3095 / /app/),给"我习惯老地址"的运维一个回退。
+# 等同 PANEL_PORT=3095 PANEL_PATH=/app/ 的语法糖。
+USE_FIXED_DEFAULT="${USE_FIXED_DEFAULT:-}"
+
+show_help() {
+    # 用 printf -- "%b" 让 ANSI escape 真正生效;heredoc 在 cat 下是字面字符。
+    printf -- "%b\n" \
+"${green}nexcore-s-ui · 一键安装${plain}
+
+${cyan}用法:${plain}
+  bash <(curl -Ls https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/install.sh) [VERSION] [OPTIONS]
+
+${cyan}VERSION${plain} (可选): vX.Y.Z 指定版本,缺省用最新 release。
+
+${cyan}OPTIONS:${plain}
+  --port=N             指定面板端口(缺省随机 10000-60000 内未占端口)
+  --path=/xxx/         指定面板路径(缺省随机 16 字符 slug)
+  --secure-entry       启用安全入口(随机 path 升到 32 字符,更难暴力扫)
+  --secure-entry=xxx   启用安全入口 + 指定 slug
+  --fixed              用老默认值(端口 3095 / 路径 /app/),回退兼容
+  --force, -f          强制重装(会覆盖 ${INSTALL_DIR},保留 db/)
+  --help, -h           显示本帮助
+
+${cyan}ENV(等价 CLI):${plain}
+  PANEL_PORT=N         同 --port=N
+  PANEL_PATH=/xxx/     同 --path=/xxx/
+  SECURE_ENTRY=1       同 --secure-entry
+  SECURE_ENTRY_PATH=x  同 --secure-entry=x
+  USE_FIXED_DEFAULT=1  同 --fixed
+  GH_OWNER GH_REPO INSTALL_DIR PKG_PREFIX CMD_NAME SERVICE_NAME
+
+${cyan}例子:${plain}
+  # 全部随机(端口 + path,首装最安全)
+  bash <(curl -Ls .../install.sh)
+
+  # 指定端口,path 随机
+  bash <(curl -Ls .../install.sh) --port=33095
+
+  # 长 32 字符安全入口(给公网生产环境)
+  bash <(curl -Ls .../install.sh) --secure-entry
+
+  # 老默认 3095 + /app/(我熟悉这个就用这个)
+  bash <(curl -Ls .../install.sh) --fixed
+
+  # 升级到指定版本 + 强制重装
+  bash <(curl -Ls .../install.sh) v1.5.2 --force"
+}
 
 for arg in "$@"; do
     case "$arg" in
-        --force|-f)  FORCE=true ;;
-        v*|V*|[0-9]*) TARGET_VERSION="$arg" ;;
+        --force|-f)              FORCE=true ;;
+        --help|-h)               show_help; exit 0 ;;
+        --port=*)                PANEL_PORT="${arg#*=}" ;;
+        --path=*)                PANEL_PATH="${arg#*=}" ;;
+        --secure-entry)          SECURE_ENTRY=1 ;;
+        --secure-entry=*)        SECURE_ENTRY=1; SECURE_ENTRY_PATH="${arg#*=}" ;;
+        --fixed)                 USE_FIXED_DEFAULT=1 ;;
+        v*|V*|[0-9]*)            TARGET_VERSION="$arg" ;;
+        *) printf -- "%b\n" "${red}未知参数: $arg${plain}" >&2
+           echo "用 --help 看支持的参数" >&2
+           exit 1 ;;
     esac
 done
 
@@ -107,6 +178,11 @@ if [[ "${mem_kb}" -gt 0 && "${mem_kb}" -lt 524288 ]]; then
     warn "系统内存 < 512MB($((mem_kb / 1024))MB),sing-box + 面板 + sqlite 同时运行可能 OOM"
 fi
 
+# 上游 s-ui / 3x-ui 共存提醒
+if [[ -f /etc/systemd/system/s-ui.service ]] || [[ -x /usr/local/s-ui/sui ]]; then
+    warn "检测到 alireza0/s-ui 也在本机。两个面板路径独立,但端口请避免冲突(本脚本随机端口可避开)"
+fi
+
 echo -e "${green}架构:${plain} ${ARCH}"
 
 # ---------- deps ----------
@@ -136,11 +212,13 @@ missing=()
 for t in "${required_tools[@]}"; do
     command -v "$t" >/dev/null 2>&1 || missing+=("$t")
 done
-# coreutils 提供 sha256sum
 if ! command -v sha256sum >/dev/null 2>&1; then
     missing+=(coreutils)
 fi
-# tzdata 不强制但有用
+# ss 用来探测端口占用(随机端口避坑) — iproute2 包
+if ! command -v ss >/dev/null 2>&1; then
+    missing+=(iproute2)
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     step "安装缺失依赖: ${missing[*]}"
     ensure_pkg "${missing[@]}" || warn "自动安装失败 — 可手动 \`apt install ${missing[*]}\` 或等价命令"
@@ -186,8 +264,6 @@ download_release() {
     fi
 
     # SHA256 best-effort:有 checksums.txt 就强校验,没有就 warn 后继续。
-    # 上游 alireza0/s-ui 的 release 没有 checksums.txt;本仓库的 release
-    # 应该带上。
     if curl -fsSL --connect-timeout 10 -o "${sum_dest}" "${sum_url}" 2>/dev/null && command -v sha256sum >/dev/null 2>&1; then
         step "校验 SHA256…" >&2
         local expected actual
@@ -296,11 +372,92 @@ EOF
     systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
 }
 
-# ---------- post-install: migrate, seed admin, start ----------
+# ---------- post-install: migrate, seed admin, setting, start ----------
+
+# 24 字符 base64 alpha-num,去掉特殊符避免 URL escape / shell 引用陷阱。
+# /dev/urandom 比 $RANDOM 强(后者 16 位熵不够撑长 slug)。
+random_slug() {
+    local len="${1:-16}"
+    head -c 64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c "$len"
+}
 
 random_credential() {
-    # base64 6 字节 → 8 字符可见,去掉特殊符避免后续 shell 引用问题
     head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12
+}
+
+# random_free_port 在 10000-60000 找一个未被监听的端口。50 次重试上限
+# (理论冲突率近 0,但万一 ephemeral port pool 大半被占,留个保险出口)。
+# port-in-use 探测优先 ss,fallback /proc/net/{tcp,tcp6}(纯 bash 兜底)。
+random_free_port() {
+    local p tries
+    for tries in $(seq 1 50); do
+        # $RANDOM 是 0-32767(15-bit),拼一次组合给 30-bit 撑足 10000-60000 范围
+        p=$(( ( (RANDOM << 15) | RANDOM ) % 50000 + 10000 ))
+        if command -v ss >/dev/null 2>&1; then
+            if ! ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}\$"; then
+                echo "$p"; return
+            fi
+        else
+            # 纯 bash fallback:读 /proc/net/tcp{,6} 第二列 hex 端口
+            local hex_port
+            hex_port=$(printf '%04X' "$p")
+            if ! grep -qE "[: ]${hex_port} " /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+                echo "$p"; return
+            fi
+        fi
+    done
+    # 50 次都没找到自由端口 — 异常环境,直接退回固定 3095 让 sui 自己报冲突
+    warn "50 次随机找不到自由端口,回退到 3095"
+    echo "3095"
+}
+
+# apply_initial_settings 决定首装的 port/path 最终值,写入 DB。
+# 必须在 systemctl start 之前(否则 sui 进程跟我们抢 sqlite lock 拿不到写权)。
+INITIAL_PORT=""
+INITIAL_PATH=""
+apply_initial_settings() {
+    local port="${PANEL_PORT}"
+    local path="${PANEL_PATH}"
+
+    if [[ "${USE_FIXED_DEFAULT}" = "1" ]]; then
+        # --fixed 给"我习惯老地址"的运维一个回退,跳过任何随机化
+        port="${port:-3095}"
+        path="${path:-/app/}"
+    else
+        # 端口:CLI/ENV > 随机
+        if [[ -z "${port}" ]]; then
+            port="$(random_free_port)"
+            step "随机分配面板端口: ${cyan}${port}${plain}"
+        fi
+        # path:CLI/ENV > secure-entry 自定义 > secure-entry 随机长 > 默认随机短
+        if [[ -z "${path}" ]]; then
+            local slug
+            if [[ "${SECURE_ENTRY}" = "1" && -n "${SECURE_ENTRY_PATH}" ]]; then
+                slug="${SECURE_ENTRY_PATH}"
+            elif [[ "${SECURE_ENTRY}" = "1" ]]; then
+                slug="$(random_slug 32)"
+                step "启用安全入口(${cyan}--secure-entry${plain},32 字符 slug)"
+            else
+                slug="$(random_slug 16)"
+                step "随机分配面板入口(16 字符 slug)"
+            fi
+            # 清头尾 / 再补一遍,确保拼好 /xxx/
+            slug="${slug##/}"
+            slug="${slug%%/}"
+            path="/${slug}/"
+        else
+            # 用户传了 path,确保前后都带 /(sui setting 要求严格)
+            [[ "${path}" != /* ]] && path="/${path}"
+            [[ "${path}" != */ ]] && path="${path}/"
+        fi
+    fi
+
+    # 写入 DB(panel 没启动,不会卡 lock)。failure 不 die — 用户能后续手改。
+    if ! "${INSTALL_DIR}/sui" setting -port "${port}" -path "${path}" >/dev/null 2>&1; then
+        warn "写入 port/path 到 settings 失败 — 装完手动: ${cyan}${CMD_NAME}${plain} 进菜单调整"
+    fi
+    INITIAL_PORT="${port}"
+    INITIAL_PATH="${path}"
 }
 
 setup_first_run() {
@@ -339,7 +496,7 @@ wait_for_active() {
 show_credentials() {
     echo
     echo -e "${green}═════════════════════════════════════════════${plain}"
-    echo -e "${green}  nexcore-s-ui 已部署${plain}"
+    echo -e "${green}  ${CMD_NAME} 已部署${plain}"
     echo -e "${green}═════════════════════════════════════════════${plain}"
 
     "${INSTALL_DIR}/sui" setting -show 2>/dev/null || \
@@ -360,11 +517,22 @@ show_credentials() {
         echo -e "  查看当前账号: ${cyan}${INSTALL_DIR}/sui admin -show${plain}"
     fi
 
+    if [[ -n "${INITIAL_PORT}" || -n "${INITIAL_PATH}" ]]; then
+        echo
+        echo -e "${yellow}首装面板配置 (★ 端口 / 路径都已随机化,务必记录):${plain}"
+        [[ -n "${INITIAL_PORT}" ]] && echo -e "  端口:   ${green}${INITIAL_PORT}${plain}"
+        [[ -n "${INITIAL_PATH}" ]] && echo -e "  入口:   ${green}${INITIAL_PATH}${plain}"
+        if [[ "${SECURE_ENTRY}" = "1" ]]; then
+            echo -e "  ${cyan}已启用安全入口(--secure-entry):路径丢了就只能 ${CMD_NAME} setting -show 后台查${plain}"
+        fi
+    fi
+
     echo
     echo -e "${green}管理命令:${plain}"
     echo "  ${CMD_NAME}                       交互菜单"
     echo "  systemctl status ${SERVICE_NAME}  服务状态"
     echo "  journalctl -u ${SERVICE_NAME} -f  实时日志"
+    echo "  ${CMD_NAME} setting -show         查询当前 端口 / 路径 / 域名 / SSL"
     echo
 }
 
@@ -377,9 +545,10 @@ echo -e "${green}版本:${plain} ${VERSION}"
 ARCHIVE="$(download_release "${VERSION}")"
 install_panel "${VERSION}" "${ARCHIVE}"
 
-# admin / migrate 必须在 systemctl start 之前 — sui CLI 与 panel 进程
-# 共用同一个 sqlite,start 之后再调 admin 会卡 db lock
+# admin / migrate / setting 都要在 systemctl start 之前 — sui CLI 跟 panel
+# 进程共用同一个 sqlite,start 之后再调 admin / setting 会卡 db lock
 setup_first_run
+apply_initial_settings
 
 step "启动服务"
 systemctl restart "${SERVICE_NAME}"

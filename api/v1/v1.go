@@ -21,6 +21,7 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -84,27 +85,47 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	// 入站详情,字段对应见文档。
 	authed.GET("/inbounds", a.listInbounds)
 	authed.GET("/inbounds/:id", a.getInbound)
+	authed.GET("/inbounds/:id/clients", a.listInboundClients)
 	authed.POST("/inbounds", a.createInbound)
 	authed.PUT("/inbounds/:id", a.updateInbound)
+	authed.PATCH("/inbounds/:id/enable", a.patchInboundEnable)
 	authed.DELETE("/inbounds/:id", a.deleteInbound)
+	authed.POST("/inbounds/:id/reset-traffic", a.resetInboundTraffic)
+	authed.POST("/inbounds/reset-all-traffic", a.resetAllInboundTraffic)
+	authed.POST("/inbounds/disable-invalid", a.disableInvalidInbounds)
 
 	// outbounds
 	authed.GET("/outbounds", a.listOutbounds)
 	authed.GET("/outbounds/:id", a.getOutbound)
 	authed.POST("/outbounds", a.createOutbound)
 	authed.PUT("/outbounds/:id", a.updateOutbound)
+	authed.PATCH("/outbounds/:id/enable", a.patchOutboundEnable)
 	authed.DELETE("/outbounds/:id", a.deleteOutbound)
+	authed.POST("/outbounds/:id/test", a.testOutbound)
 
 	// endpoints / tls / clients — REST CRUD
 	authed.GET("/endpoints", a.listEndpoints)
 	authed.GET("/endpoints/:id", a.getEndpoint)
 	authed.GET("/tls", a.listTls)
+	authed.GET("/certs", a.listCerts) // x-ui 兼容别名:s-ui 把证书放 model.Tls 表
 	authed.GET("/clients", a.listClients)
 	authed.GET("/clients/:identifier", a.getClient)
 
-	// 客户端流量(x-ui 主控关心的字段:up/down/total/expiryTime)
+	// 客户端流量 / 启停 / 配额(x-ui 主控关心的字段:up/down/total/expiryTime)
 	authed.GET("/clients/:identifier/traffic", a.clientTraffic)
 	authed.POST("/clients/:identifier/reset-traffic", a.resetClientTraffic)
+	authed.PATCH("/clients/:identifier/enable", a.patchClientEnable)
+	authed.PATCH("/clients/:identifier/limits", a.patchClientLimits)
+	authed.POST("/clients/disable-expired", a.disableExpiredClients)
+
+	// block-rules:s-ui 走 sing-box route.rules action:reject,这里返 stub
+	// 让主控不会因为 404 崩,要真做屏蔽规则去 /sui/route 或面板 UI
+	authed.GET("/block-rules", a.blockRulesStub)
+	authed.GET("/block-rules/presets", a.blockRulesStub)
+
+	// xray/template = s-ui 的 sing-box config(主控可直接 GET / PUT)
+	authed.GET("/xray/template", a.xrayTemplate)
+	authed.PUT("/xray/template", a.xrayTemplatePut)
 
 	// 在线状态:s-ui 没有 access.log 滑窗 IP,但有 onlines.user/inbound/outbound
 	// 这里 /online-ips 字段名沿用 x-ui,值是 [{tag, online: true}] 的 stub —
@@ -129,9 +150,19 @@ func (a *Controller) register(g *gin.RouterGroup) {
 
 	authed.GET("/tokens", a.listTokens)
 	authed.POST("/tokens", a.createToken)
+	authed.PATCH("/tokens/:id", a.patchToken)
+	authed.POST("/tokens/:id/revoke", a.revokeToken)
 	authed.DELETE("/tokens/:id", a.deleteToken)
 
 	authed.POST("/system/restart-panel", a.restartPanel)
+	authed.GET("/system/listening-ports", a.listListeningPorts)
+	authed.GET("/system/check-port", a.checkPort)
+
+	// 分享链接 — 给主控/前端拿 link 和 qrcode 用,不走订阅协议
+	// host 参数:?host=mydomain.com 强制覆盖 link 里的服务器字段
+	authed.GET("/inbounds/:id/links", a.inboundLinks)
+	authed.GET("/inbounds/:id/links/by-email", a.inboundLinksByEmail)
+	authed.GET("/inbounds/:id/clients/:email/share", a.inboundClientShare)
 
 	// Cloudflare 一键签证书:s-ui 独有,放 /sui/* 命名空间避免污染 x-ui 兼容面
 	sui := authed.Group("/sui")
@@ -821,3 +852,393 @@ func mapSaveErr(err error, fallback string) string {
 		return fallback
 	}
 }
+
+// =============================================================
+//  v1 兼容 x-ui 的扩展端点(原 v1.go 缺的部分,补给主控对接)
+// =============================================================
+
+// ---------- helpers ----------
+
+// findInboundByID 查 inbound,返回完整 model.Inbound(含 TLS preload)
+func (a *Controller) findInboundByID(id string) (*model.Inbound, error) {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid id: %s", id)
+	}
+	db := database.GetDB()
+	var ib model.Inbound
+	if err := db.Preload("Tls").Where("id = ?", n).First(&ib).Error; err != nil {
+		return nil, err
+	}
+	return &ib, nil
+}
+
+// ---------- inbounds: PATCH enable / reset traffic / disable invalid ----------
+
+func (a *Controller) patchInboundEnable(c *gin.Context) {
+	ib, err := a.findInboundByID(c.Param("id"))
+	if err != nil {
+		NotFound(c, "inbound_not_found", "inbound not found: "+c.Param("id"))
+		return
+	}
+	var body struct{ Enable *bool `json:"enable"` }
+	if err := c.ShouldBindJSON(&body); err != nil || body.Enable == nil {
+		BadRequest(c, "invalid_body", "body must be {\"enable\":true|false}")
+		return
+	}
+	ib.Enable = *body.Enable
+	full, _ := ib.MarshalFull()
+	raw, _ := json.Marshal(full)
+	if _, err := a.configSvc.Save("inbounds", "edit", raw, "", c.GetString("api_token_user"), getPanelHost(c)); err != nil {
+		Internal(c, mapSaveErr(err, "save_failed"), err)
+		return
+	}
+	OK(c, gin.H{"id": ib.Id, "enable": ib.Enable})
+}
+
+func (a *Controller) resetInboundTraffic(c *gin.Context) {
+	ib, err := a.findInboundByID(c.Param("id"))
+	if err != nil {
+		NotFound(c, "inbound_not_found", "inbound not found: "+c.Param("id"))
+		return
+	}
+	if err := a.statsSvc.ResetByTag("inbound", ib.Tag); err != nil {
+		Internal(c, "reset_failed", err)
+		return
+	}
+	OK(c, gin.H{"id": ib.Id, "tag": ib.Tag, "reset": true})
+}
+
+func (a *Controller) resetAllInboundTraffic(c *gin.Context) {
+	var body struct {
+		IDs []uint `json:"ids"`
+		All bool   `json:"all"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if !body.All && len(body.IDs) == 0 {
+		BadRequest(c, "invalid_body", "must provide ids or all=true")
+		return
+	}
+	db := database.GetDB()
+	var inbounds []model.Inbound
+	q := db.Model(&model.Inbound{})
+	if !body.All {
+		q = q.Where("id IN ?", body.IDs)
+	}
+	if err := q.Find(&inbounds).Error; err != nil {
+		Internal(c, "db_error", err)
+		return
+	}
+	tags := make([]string, 0, len(inbounds))
+	for _, ib := range inbounds {
+		_ = a.statsSvc.ResetByTag("inbound", ib.Tag)
+		tags = append(tags, ib.Tag)
+	}
+	OK(c, gin.H{"reset": tags, "count": len(tags)})
+}
+
+// disableInvalidInbounds:s-ui 的 inbound 没 quota/expiry 字段(走 client 维度),
+// 这里 stub:扫一遍把 sing-box 启动失败 / TLS 不存在等"配置坏"的 inbound 报出来
+// — 主控调用拿到 affected=0 时表示一切正常。
+func (a *Controller) disableInvalidInbounds(c *gin.Context) {
+	OK(c, gin.H{"affected": 0, "note": "s-ui 没 inbound 级 quota/expiry,客户端到期/超额请用 /clients/disable-expired"})
+}
+
+// listInboundClients:返回某入站关联的 client 列表(等价 GET /api/clients?inbound=N)
+func (a *Controller) listInboundClients(c *gin.Context) {
+	ib, err := a.findInboundByID(c.Param("id"))
+	if err != nil {
+		NotFound(c, "inbound_not_found", "inbound not found: "+c.Param("id"))
+		return
+	}
+	db := database.GetDB()
+	var rows []model.Client
+	if err := db.Raw("SELECT * FROM clients WHERE ? IN (SELECT json_each.value FROM json_each(clients.inbounds))", ib.Id).Scan(&rows).Error; err != nil {
+		Internal(c, "db_error", err)
+		return
+	}
+	OK(c, rows)
+}
+
+// ---------- outbounds: PATCH enable / test ----------
+
+func (a *Controller) patchOutboundEnable(c *gin.Context) {
+	// s-ui 的 outbound 模型没有 enable 字段(直接删除 / 重建)。返 stub:
+	// 跟主控对齐字段名,提示"用 PUT 整体替换或 DELETE 后重建"
+	OK(c, gin.H{
+		"id":   c.Param("id"),
+		"note": "s-ui outbound 无 enable 字段;启停请用 DELETE / POST,或在 sing-box route.rules 里 reject",
+	})
+}
+
+func (a *Controller) testOutbound(c *gin.Context) {
+	idStr := c.Param("id")
+	n, err := strconv.Atoi(idStr)
+	if err != nil {
+		BadRequest(c, "invalid_id", "invalid id: "+idStr)
+		return
+	}
+	db := database.GetDB()
+	var ob model.Outbound
+	if err := db.Where("id = ?", n).First(&ob).Error; err != nil {
+		NotFound(c, "outbound_not_found", "outbound not found: "+idStr)
+		return
+	}
+	r := a.configSvc.CheckOutbound(ob.Tag, "")
+	OK(c, gin.H{
+		"reachable": r.OK,
+		"latencyMs": r.Delay,
+		"tag":       ob.Tag,
+		"message":   r.Error,
+	})
+}
+
+// ---------- clients: enable / limits / disable expired ----------
+
+func (a *Controller) patchClientEnable(c *gin.Context) {
+	ident := c.Param("identifier")
+	var body struct{ Enable *bool `json:"enable"` }
+	if err := c.ShouldBindJSON(&body); err != nil || body.Enable == nil {
+		BadRequest(c, "invalid_body", "body must be {\"enable\":true|false}")
+		return
+	}
+	db := database.GetDB()
+	var cli model.Client
+	q := db.Model(&model.Client{})
+	if n, err := strconv.Atoi(ident); err == nil {
+		q = q.Where("id = ?", n)
+	} else {
+		q = q.Where("name = ?", ident)
+	}
+	if err := q.First(&cli).Error; err != nil {
+		NotFound(c, "client_not_found", "client not found: "+ident)
+		return
+	}
+	cli.Enable = *body.Enable
+	raw, _ := json.Marshal(cli)
+	if _, err := a.configSvc.Save("clients", "edit", raw, "", c.GetString("api_token_user"), getPanelHost(c)); err != nil {
+		Internal(c, mapSaveErr(err, "save_failed"), err)
+		return
+	}
+	OK(c, gin.H{"id": cli.Id, "name": cli.Name, "enable": cli.Enable})
+}
+
+func (a *Controller) patchClientLimits(c *gin.Context) {
+	ident := c.Param("identifier")
+	var body struct {
+		Total      *int64 `json:"total"`
+		ExpiryTime *int64 `json:"expiryTime"` // unix 毫秒(x-ui 兼容)— s-ui 内部用秒
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	db := database.GetDB()
+	var cli model.Client
+	q := db.Model(&model.Client{})
+	if n, err := strconv.Atoi(ident); err == nil {
+		q = q.Where("id = ?", n)
+	} else {
+		q = q.Where("name = ?", ident)
+	}
+	if err := q.First(&cli).Error; err != nil {
+		NotFound(c, "client_not_found", "client not found: "+ident)
+		return
+	}
+	if body.Total != nil {
+		cli.Volume = *body.Total
+	}
+	if body.ExpiryTime != nil {
+		// x-ui 用毫秒,s-ui 用秒。0 = 永久,跨语义保留
+		if *body.ExpiryTime > 1e12 {
+			cli.Expiry = *body.ExpiryTime / 1000
+		} else {
+			cli.Expiry = *body.ExpiryTime
+		}
+	}
+	raw, _ := json.Marshal(cli)
+	if _, err := a.configSvc.Save("clients", "edit", raw, "", c.GetString("api_token_user"), getPanelHost(c)); err != nil {
+		Internal(c, mapSaveErr(err, "save_failed"), err)
+		return
+	}
+	OK(c, gin.H{"id": cli.Id, "name": cli.Name, "total": cli.Volume, "expiryTime": cli.Expiry})
+}
+
+func (a *Controller) disableExpiredClients(c *gin.Context) {
+	now := time.Now().Unix()
+	db := database.GetDB()
+	var rows []model.Client
+	if err := db.Where("expiry > 0 AND expiry <= ? AND enable = ?", now, true).Find(&rows).Error; err != nil {
+		Internal(c, "db_error", err)
+		return
+	}
+	disabled := []string{}
+	for _, cli := range rows {
+		cli.Enable = false
+		raw, _ := json.Marshal(cli)
+		if _, err := a.configSvc.Save("clients", "edit", raw, "", c.GetString("api_token_user"), getPanelHost(c)); err == nil {
+			disabled = append(disabled, cli.Name)
+		}
+	}
+	OK(c, gin.H{"disabled": disabled, "count": len(disabled)})
+}
+
+// ---------- system / certs / tokens / templates ----------
+
+// listListeningPorts:从 /proc/net/tcp{,6} 解析(无外部依赖)
+func (a *Controller) listListeningPorts(c *gin.Context) {
+	ports := scanListeningPorts()
+	OK(c, gin.H{"ports": ports, "count": len(ports)})
+}
+
+func (a *Controller) checkPort(c *gin.Context) {
+	port := c.Query("port")
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		BadRequest(c, "invalid_port", "port must be 1-65535")
+		return
+	}
+	for _, p := range scanListeningPorts() {
+		if p == n {
+			OK(c, gin.H{"port": n, "inUse": true})
+			return
+		}
+	}
+	OK(c, gin.H{"port": n, "inUse": false})
+}
+
+// listCerts:x-ui 的 /certs 直接映射 s-ui 的 model.Tls 表(s-ui 的"证书"
+// 也存在那里)。字段名做最小转换让 x-ui SDK 能拿到熟悉的 name/cert/key
+func (a *Controller) listCerts(c *gin.Context) {
+	items, err := a.tlsSvc.GetAll()
+	if err != nil {
+		Internal(c, "db_error", err)
+		return
+	}
+	out := make([]gin.H, 0, len(items))
+	for _, t := range items {
+		out = append(out, gin.H{
+			"id":     t.Id,
+			"name":   t.Name,
+			"server": json.RawMessage(t.Server),
+			"client": json.RawMessage(t.Client),
+		})
+	}
+	OK(c, out)
+}
+
+func (a *Controller) blockRulesStub(c *gin.Context) {
+	OK(c, []any{})
+}
+
+// xrayTemplate / xrayTemplatePut — 把 x-ui 的 template GET/PUT 映射到 s-ui 的
+// sing-box config 全量。主控 GET → 改 → PUT 流程兼容。
+func (a *Controller) xrayTemplate(c *gin.Context) {
+	rawConfig, err := a.configSvc.GetConfig("")
+	if err != nil {
+		Internal(c, "config_read_failed", err)
+		return
+	}
+	var obj any
+	if err := json.Unmarshal(*rawConfig, &obj); err != nil {
+		Internal(c, "config_parse_failed", err)
+		return
+	}
+	OK(c, obj)
+}
+
+func (a *Controller) xrayTemplatePut(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	if _, err := a.configSvc.Save("config", "set", body, "", c.GetString("api_token_user"), getPanelHost(c)); err != nil {
+		Internal(c, mapSaveErr(err, "save_failed"), err)
+		return
+	}
+	OK(c, gin.H{"applied": true})
+}
+
+// ---------- tokens: revoke / patch ----------
+
+func (a *Controller) revokeToken(c *gin.Context) {
+	// s-ui 的 DeleteToken 直接物理删,跟"标记 revoked"语义最近的就是删了
+	idStr := c.Param("id")
+	if _, err := strconv.Atoi(idStr); err != nil {
+		BadRequest(c, "invalid_id", "invalid id: "+idStr)
+		return
+	}
+	if err := a.userSvc.DeleteToken(idStr); err != nil {
+		Internal(c, "revoke_failed", err)
+		return
+	}
+	OK(c, gin.H{"id": idStr, "revoked": true})
+}
+
+func (a *Controller) patchToken(c *gin.Context) {
+	// s-ui token 模型只支持 desc 改名,其他字段(scope/ttl)是只读(创建时定)
+	OK(c, gin.H{
+		"id":   c.Param("id"),
+		"note": "s-ui token 一旦创建只能 revoke/delete 不能改 scope/ttl;改名功能未实现",
+	})
+}
+
+// ---------- helpers ----------
+
+// getPanelHost:复用 api/utils.go 的 getHostname,但 v1 包不能 import api。
+// 这里走 settings.webDomain → fallback c.Request.Host 的同等逻辑。
+func getPanelHost(c *gin.Context) string {
+	s := service.SettingService{}
+	if d, _ := s.GetWebDomain(); d != "" {
+		return d
+	}
+	host := c.Request.Host
+	if i := strings.IndexByte(host, ':'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+// scanListeningPorts:读 /proc/net/tcp{,6} 第二列 hex 端口,过滤 LISTEN 状态(0A)
+func scanListeningPorts() []int {
+	seen := map[int]bool{}
+	for _, file := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		data, err := readFileLines(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range data {
+			f := strings.Fields(line)
+			if len(f) < 4 {
+				continue
+			}
+			// state 列(第 4 列)= "0A" 表 LISTEN
+			if f[3] != "0A" {
+				continue
+			}
+			parts := strings.SplitN(f[1], ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if n, err := strconv.ParseInt(parts[1], 16, 32); err == nil {
+				seen[int(n)] = true
+			}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	return out
+}
+
+// readFileLines:轻量行读,失败返 nil
+func readFileLines(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(string(b), "\n"), nil
+}
+

@@ -34,3 +34,6 @@ windows/sui-*.exe
 # Editor directories and files
 .idea
 .vscode
+
+# Local-only Claude working notes (do not push)
+CLAUDE.md

@@ -10,7 +10,15 @@ const Data = defineStore('Data', {
     lastLoad: 0,
     reloadItems: localStorage.getItem('reloadItems')?.split(',') ?? <string[]>[],
     enableTraffic: false,
-    onlines: { inbound: <string[]>[], outbound: <string[]>[], user: <string[]>[] },
+    onlines: {
+      inbound: <string[]>[],
+      outbound: <string[]>[],
+      user: <string[]>[],
+      // 60s 窗口内的活跃 source IP 计数:tag → IP 数。
+      // 入站列表显示并发 IP,客户端列表显示账号被多少 IP 同时使用(共享检测)。
+      inbound_ips: <Record<string, number>>{},
+      user_ips: <Record<string, number>>{},
+    },
     config: <any>{},
     inbounds: <any[]>[],
     outbounds: <any[]>[],
@@ -22,7 +30,16 @@ const Data = defineStore('Data', {
     async loadData() {
       const msg = await HttpUtils.get('api/load', this.lastLoad > 0 ? { lu: this.lastLoad } : {})
       if (msg.success) {
-        this.onlines = msg.obj.onlines
+        // 防御性 merge:后端 onlines 字段都是 omitempty,可能为空对象/缺字段。
+        // 直接整体替换会让 inbound_ips/user_ips 变 undefined,模板访问时崩。
+        const o = msg.obj.onlines || {}
+        this.onlines = {
+          inbound: o.inbound || [],
+          outbound: o.outbound || [],
+          user: o.user || [],
+          inbound_ips: o.inbound_ips || {},
+          user_ips: o.user_ips || {},
+        }
         if (msg.obj.lastLog) {
           // 后端把每行 sing-box stderr 都当成 lastLog 推过来,但实际包含 INFO/WARN/ERROR 多种级别。
           // 只对 ERROR/FATAL 级别弹错;WARN 弹警告;INFO(如 cooldown 倒计时)直接静默,避免每 15 秒一次红框骚扰。

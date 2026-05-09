@@ -20,6 +20,15 @@ type Inbound struct {
 	Addrs   json.RawMessage `json:"addrs" form:"addrs"`
 	OutJson json.RawMessage `json:"out_json" form:"out_json"`
 	Options json.RawMessage `json:"-" form:"-"`
+
+	// Ext 存自定义元数据(JSON 字符串),跟 sing-box 配置无关。当前用于 Basic
+	// Auth 协议的 per-cred 流量/到期限制:
+	//   {"creds":{"<username>":{"volume_limit":N,"expiry":N,"enable":true}}}
+	// cronjob/inboundLimitJob 周期检查 stats + 当前时间,超限/过期的 username
+	// 改 enable=false,重建 Options.users(过滤掉 disabled 的),sing-box reload。
+	// 注:用 string 而不是 json.RawMessage —— GORM 对 SQLite 的 RawMessage
+	// + default tag 组合 Scan 失败(driver.Value=string 无法存进 *json.RawMessage)
+	Ext string `json:"-" form:"-"`
 }
 
 func (i *Inbound) UnmarshalJSON(data []byte) error {
@@ -45,6 +54,9 @@ func (i *Inbound) UnmarshalJSON(data []byte) error {
 	}
 	delete(raw, "tls_id")
 	delete(raw, "tls")
+	// users 字段统一不持久化到 inbound.Options —— 所有"多账号"协议(包括
+	// mixed/socks/http/naive 的 Basic Auth)都走 clients 表多对多关联。
+	// 下发 sing-box 时由 service.addUsers 从 clients.config[type] 注入。
 	delete(raw, "users")
 
 	// Enable - 缺省视为 true(老数据无此字段时不影响行为)
@@ -66,6 +78,14 @@ func (i *Inbound) UnmarshalJSON(data []byte) error {
 	// OutJson
 	i.OutJson, _ = json.MarshalIndent(raw["out_json"], "", "  ")
 	delete(raw, "out_json")
+
+	// Ext (per-cred 限制元数据)— 不参与 sing-box 配置,只持久化我们的元信息
+	if v, ok := raw["ext"]; ok && v != nil {
+		if b, err := json.Marshal(v); err == nil {
+			i.Ext = string(b)
+		}
+	}
+	delete(raw, "ext")
 
 	// Remaining fields
 	i.Options, err = json.MarshalIndent(raw, "", "  ")
@@ -105,6 +125,12 @@ func (i Inbound) MarshalFull() (*map[string]interface{}, error) {
 	combined["tls_id"] = i.TlsId
 	combined["addrs"] = i.Addrs
 	combined["out_json"] = i.OutJson
+	if i.Ext != "" {
+		var extObj interface{}
+		if err := json.Unmarshal([]byte(i.Ext), &extObj); err == nil {
+			combined["ext"] = extObj
+		}
+	}
 
 	if i.Options != nil {
 		var restFields map[string]interface{}

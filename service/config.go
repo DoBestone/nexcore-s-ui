@@ -276,6 +276,15 @@ func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initU
 	return objs, nil
 }
 
+// CoreInstance 暴露 core.Box 实例给 api 层 — 例如查询当前活跃连接数。
+// 核心未运行时返回 nil。
+func (s *ConfigService) CoreInstance() *core.Box {
+	if corePtr == nil || !corePtr.IsRunning() {
+		return nil
+	}
+	return corePtr.GetInstance()
+}
+
 func (s *ConfigService) CheckChanges(lu string) (bool, error) {
 	if lu == "" {
 		return true, nil

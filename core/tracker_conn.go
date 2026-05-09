@@ -79,6 +79,23 @@ func (c *ConnTracker) RoutedPacketConnection(ctx context.Context, conn network.P
 	return c.createWrappedPacketConn(conn, connID)
 }
 
+// CountByNetwork 返回当前活跃连接数按 TCP/UDP 分类。给前端面板"网络速率"
+// 区域显示当前并发连接情况。开销 = O(N) 遍历 + 短锁,在常规规模(数千)
+// 没问题;如果机场场景上百万并发再换 atomic 计数。
+func (c *ConnTracker) CountByNetwork() (tcp, udp int) {
+	c.access.Lock()
+	defer c.access.Unlock()
+	for _, info := range c.connections {
+		switch info.Type {
+		case "tcp":
+			tcp++
+		case "udp":
+			udp++
+		}
+	}
+	return
+}
+
 func (c *ConnTracker) CloseConnByInbound(inbound string) int {
 	c.access.Lock()
 	defer c.access.Unlock()

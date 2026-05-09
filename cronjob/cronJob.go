@@ -21,7 +21,8 @@ func (c *CronJob) Start(loc *time.Location, trafficAge int) error {
 	go func() {
 		// Start stats job
 		c.cron.AddJob("@every 10s", NewStatsJob(trafficAge > 0))
-		// Start expiry job
+		// 客户端 expiry/quota — Basic Auth 协议(mixed/socks/http/naive)
+		// 也走 clients 表,所以用同一个 DepleteJob 一并处理,无需独立 cron
 		c.cron.AddJob("@every 1m", NewDepleteJob())
 		// Start deleting old stats
 		if trafficAge > 0 {

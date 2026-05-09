@@ -47,12 +47,6 @@
         <span class="ov-stat__label">{{ $t('pages.clients') }}</span>
         <span class="ov-stat__value">{{ totalClients }}</span>
       </div>
-      <div v-if="onlineCount > 0" class="ov-stat ov-stat--ok">
-        <span class="ov-stat__label">
-          <span class="status-dot online"></span>{{ $t('online') }}
-        </span>
-        <span class="ov-stat__value">{{ onlineCount }}</span>
-      </div>
       <div class="ov-stat">
         <span class="ov-stat__label">{{ $t('home.topTraffic.up', '上行') }} / {{ $t('home.topTraffic.down', '下行') }}</span>
         <span class="ov-stat__value ov-stat__value--small">
@@ -65,6 +59,24 @@
         <span class="ov-stat__label">{{ $t('stats.totalUsage', '总流量') }}</span>
         <span class="ov-stat__value">{{ HumanReadable.sizeFormat(totalUp + totalDown) }}</span>
       </div>
+      <el-tooltip content="近 10s 平均上行速率 — sing-box 流量统计每 10s 落库一次,无新流量时显示 0 B/s 是正常的" placement="top">
+        <div class="ov-stat ov-stat--rate">
+          <span class="ov-stat__label">↑ 上行</span>
+          <span class="ov-stat__value ov-stat__value--small">{{ rateUp }}/s</span>
+        </div>
+      </el-tooltip>
+      <el-tooltip content="近 10s 平均下行速率" placement="top">
+        <div class="ov-stat ov-stat--rate">
+          <span class="ov-stat__label">↓ 下行</span>
+          <span class="ov-stat__value ov-stat__value--small">{{ rateDown }}/s</span>
+        </div>
+      </el-tooltip>
+      <el-tooltip content="sing-box 当前活跃连接数 — TCP / UDP" placement="top">
+        <div class="ov-stat ov-stat--rate">
+          <span class="ov-stat__label">TCP / UDP</span>
+          <span class="ov-stat__value ov-stat__value--small mono">{{ connStats.tcp }} / {{ connStats.udp }}</span>
+        </div>
+      </el-tooltip>
       <div class="ov-toolbar">
         <el-input
           v-model="filter"
@@ -95,7 +107,7 @@
           <span class="cat-head__count">{{ multiUser.length }}</span>
         </div>
       </template>
-      <el-table :data="filtered(multiUser)" stripe size="small" class="nc-table ib-table">
+      <el-table :data="filtered(multiUser)" :row-key="ibRowKey" stripe size="small" class="nc-table ib-table">
         <el-table-column :label="$t('enable', '启用')" width="68" align="center">
           <template #default="{ row }">
             <el-switch
@@ -128,6 +140,34 @@
             <span v-else class="muted">0</span>
           </template>
         </el-table-column>
+        <el-table-column label="在线 IP" width="100" align="center">
+          <template #default="{ row }">
+            <el-popover
+              v-if="ipCountOf(row.tag) > 0"
+              placement="top"
+              trigger="click"
+              :width="280"
+              @show="loadInboundIps(row.tag)"
+            >
+              <template #reference>
+                <el-tag type="success" size="small" effect="plain" class="mono ip-clickable">
+                  {{ ipCountOf(row.tag) }}
+                </el-tag>
+              </template>
+              <div class="ip-pop">
+                <div class="ip-pop__head">
+                  <b>{{ row.tag }}</b> · 60s 内 {{ ipCountOf(row.tag) }} 个独立 IP
+                </div>
+                <div v-if="inboundIpsLoading[row.tag]" class="ip-pop__loading">加载中…</div>
+                <div v-else-if="inboundIpsCache[row.tag]?.length" class="ip-pop__list mono">
+                  <div v-for="ip in inboundIpsCache[row.tag]" :key="ip" class="ip-pop__item">{{ ip }}</div>
+                </div>
+                <div v-else class="ip-pop__empty">暂无具体 IP</div>
+              </div>
+            </el-popover>
+            <span v-else class="muted">0</span>
+          </template>
+        </el-table-column>
         <el-table-column :label="$t('stats.totalUsage', '总流量')" min-width="170">
           <template #default="{ row }">
             <span v-if="trafficOf(row.tag)" class="mono traffic-cell">
@@ -144,10 +184,38 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="$t('online')" width="64" align="center">
+        <el-table-column label="中转" width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="onlines.includes(row.tag)" class="status-dot online"></span>
-            <span v-else class="muted">—</span>
+            <el-tag v-if="relayOf(row.tag)" type="warning" size="small" effect="plain" class="mono">
+              → {{ relayOf(row.tag) }}
+            </el-tag>
+            <span v-else class="muted">本机出站</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="链路延迟" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="!relayOf(row.tag)" class="muted">—</span>
+            <el-tooltip v-else
+              :content="checkResults[relayOf(row.tag)]?.loading ? '探测中…' : (checkResults[relayOf(row.tag)]?.errorMessage || '点击重测中转链路')"
+              placement="top"
+            >
+              <span class="delay-cell" :class="{ 'is-clickable': !checkResults[relayOf(row.tag)]?.loading }" @click="!checkResults[relayOf(row.tag)]?.loading && manualProbe(relayOf(row.tag))">
+                <el-icon v-if="checkResults[relayOf(row.tag)]?.loading" class="is-loading"><Loading /></el-icon>
+                <template v-else-if="checkResults[relayOf(row.tag)]">
+                  <el-tag
+                    v-if="checkResults[relayOf(row.tag)].success"
+                    :type="latencyType(checkResults[relayOf(row.tag)].data?.Delay ?? 0)"
+                    size="small"
+                    effect="plain"
+                    class="mono"
+                  >
+                    {{ checkResults[relayOf(row.tag)].data?.Delay }} ms
+                  </el-tag>
+                  <el-icon v-else style="color: var(--nc-danger)"><CircleClose /></el-icon>
+                </template>
+                <el-icon v-else><Stopwatch /></el-icon>
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column :label="$t('actions.action')" width="180" align="center">
@@ -195,7 +263,7 @@
           <span class="cat-head__count">{{ singleUser.length }}</span>
         </div>
       </template>
-      <el-table :data="filtered(singleUser)" stripe size="small" class="nc-table ib-table">
+      <el-table :data="filtered(singleUser)" :row-key="ibRowKey" stripe size="small" class="nc-table ib-table">
         <el-table-column :label="$t('enable', '启用')" width="68" align="center">
           <template #default="{ row }">
             <el-switch
@@ -229,14 +297,44 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column :label="$t('online')" width="64" align="center">
+        <el-table-column label="中转" width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="onlines.includes(row.tag)" class="status-dot online"></span>
-            <span v-else class="muted">—</span>
+            <el-tag v-if="relayOf(row.tag)" type="warning" size="small" effect="plain" class="mono">
+              → {{ relayOf(row.tag) }}
+            </el-tag>
+            <span v-else class="muted">本机出站</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="链路延迟" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="!relayOf(row.tag)" class="muted">—</span>
+            <el-tooltip v-else
+              :content="checkResults[relayOf(row.tag)]?.loading ? '探测中…' : (checkResults[relayOf(row.tag)]?.errorMessage || '点击重测中转链路')"
+              placement="top"
+            >
+              <span class="delay-cell" :class="{ 'is-clickable': !checkResults[relayOf(row.tag)]?.loading }" @click="!checkResults[relayOf(row.tag)]?.loading && manualProbe(relayOf(row.tag))">
+                <el-icon v-if="checkResults[relayOf(row.tag)]?.loading" class="is-loading"><Loading /></el-icon>
+                <template v-else-if="checkResults[relayOf(row.tag)]">
+                  <el-tag
+                    v-if="checkResults[relayOf(row.tag)].success"
+                    :type="latencyType(checkResults[relayOf(row.tag)].data?.Delay ?? 0)"
+                    size="small"
+                    effect="plain"
+                    class="mono"
+                  >
+                    {{ checkResults[relayOf(row.tag)].data?.Delay }} ms
+                  </el-tag>
+                  <el-icon v-else style="color: var(--nc-danger)"><CircleClose /></el-icon>
+                </template>
+                <el-icon v-else><Stopwatch /></el-icon>
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column :label="$t('actions.action')" width="180" align="center">
           <template #default="{ row }">
+            <!-- 单用户卡现在只剩 direct/tun/redirect/tproxy 等"端口=入口"协议,
+                 没有凭证概念,主按钮就是编辑 -->
             <el-button size="small" @click="showModal(row.id)">
               <el-icon><Edit /></el-icon>编辑
             </el-button>
@@ -308,7 +406,7 @@ import { createInbound, Inbound } from '@/types/inbounds'
 import RandomUtil from '@/plugins/randomUtil'
 import {
   Plus, Edit, Delete, CopyDocument, DataLine, RefreshRight, RefreshLeft,
-  Search, User, Connection, ArrowDown,
+  Search, User, Connection, ArrowDown, Loading, CircleClose, Stopwatch,
 } from '@element-plus/icons-vue'
 
 const appConfig = computed((): Config => <Config>Data().config)
@@ -319,10 +417,53 @@ const filter = ref('')
 const inbounds = computed((): any[] => <any[]>(Data().inbounds ?? []))
 const tlsConfigs = computed((): any[] => <any[]>(Data().tlsConfigs ?? []))
 
-// 多用户协议:有 users 字段(后端按协议特性塞);其它一律单用户。
-// SS 在 ss-2022 multi-user 模式下也算多用户(后端已正确暴露 users 字段)。
-const multiUser = computed(() => inbounds.value.filter((i: any) => Array.isArray(i.users)))
-const singleUser = computed(() => inbounds.value.filter((i: any) => !Array.isArray(i.users)))
+// 多用户 = 一端口多账号语义(N 组凭证可并发独立使用),包含两种凭证形态:
+//  - UUID 类(vless/vmess/trojan/ss/shadowtls/hysteria/tuic/anytls):
+//    凭证存 clients 表,管理走 InboundClients modal
+//  - Basic Auth 类(mixed/socks/http/naive):users 是 inbound 自己的
+//    [{username,password}] 数组,管理走 InboundCreds 信息卡片
+// 单用户 = 端口=入口、无凭证概念(direct/tun/redirect/tproxy)
+const UUID_MULTI_USER_TYPES = ['vless', 'vmess', 'trojan', 'shadowsocks', 'shadowtls', 'hysteria', 'hysteria2', 'tuic', 'anytls']
+const BASIC_AUTH_TYPES = ['mixed', 'socks', 'http', 'naive']
+const TRUE_MULTI_USER_TYPES = [...UUID_MULTI_USER_TYPES, ...BASIC_AUTH_TYPES]
+const isBasicAuth = (type: string) => BASIC_AUTH_TYPES.includes(type)
+const isMultiUserInbound = (i: any) => TRUE_MULTI_USER_TYPES.includes(i?.type) && Array.isArray(i.users)
+const multiUser = computed(() => inbounds.value.filter(isMultiUserInbound))
+const singleUser = computed(() => inbounds.value.filter((i: any) => !isMultiUserInbound(i)))
+
+// el-table 用稳定 key 做 row diff,流量轮询/启用切换不会重建 DOM
+const ibRowKey = (row: any) => row?.id ?? row?.tag ?? ''
+
+// 60s 窗口内此入站的活跃 source IP 数(由 sing-box StatsTracker 上报)
+const ipCountOf = (tag: string): number => Data().onlines?.inbound_ips?.[tag] ?? 0
+
+// popover 按需拉具体 IP 列表 — 不点不发请求
+const inboundIpsCache = ref<Record<string, string[]>>({})
+const inboundIpsLoading = ref<Record<string, boolean>>({})
+const loadInboundIps = async (tag: string) => {
+  if (inboundIpsLoading.value[tag]) return
+  inboundIpsLoading.value[tag] = true
+  try {
+    const r = await HttpUtils.get('api/onlineIps', { resource: 'inbound', tag })
+    if (r.success) inboundIpsCache.value[tag] = (r.obj?.ips || []).sort()
+  } finally {
+    delete inboundIpsLoading.value[tag]
+  }
+}
+
+// 中转目标:从 route.rules 里找带 _nb_binding 标记、inbound 包含此 tag 的规则,
+// 拿出 outbound 字段。老版本残留的 action:direct binding 视为"本机出站"
+// (空字符串)— 用户下次编辑保存会自动清那条规则。
+const relayOf = (tag: string): string => {
+  const cfg = Data().config as any
+  for (const r of (cfg?.route?.rules || [])) {
+    if (r?._nb_binding && Array.isArray(r.inbound) && r.inbound.includes(tag)) {
+      if (r.action === 'direct') return ''
+      return r.outbound || ''
+    }
+  }
+  return ''
+}
 
 const filtered = (list: any[]) => {
   const q = filter.value.trim().toLowerCase()
@@ -339,11 +480,9 @@ const inTags = computed((): string[] => [
   ...(Data().endpoints?.filter((e: any) => e.listen_port > 0).map((e: any) => e.tag) ?? []),
 ])
 
-const onlines = computed(() => Data().onlines.inbound ?? [])
-const onlineUsers = computed(() => Data().onlines?.user ?? [])
-
+// 注:不再展示 onlines —— 跟出站页同样原因,onlines 是"近期有流量"不是
+// 连通性指标,在机场场景下会误导(没人在用 = 离线 ≠ 不能用)。
 const totalClients = computed(() => (Data().clients ?? []).length)
-const onlineCount = computed(() => onlineUsers.value.length)
 
 const totalUp = computed(() => Object.values(traffic.value).reduce((s, t) => s + (t.up || 0), 0))
 const totalDown = computed(() => Object.values(traffic.value).reduce((s, t) => s + (t.down || 0), 0))
@@ -377,7 +516,25 @@ const confirmDel = async (row: any) => {
       { type: 'warning', confirmButtonText: i18n.global.t('yes'), cancelButtonText: i18n.global.t('no') },
     )
   } catch { return }
-  await Data().save('inbounds', 'del', row.tag)
+  const ok = await Data().save('inbounds', 'del', row.tag)
+  if (ok) await cleanupInboundBinding(row.tag)
+}
+
+// 删除入站时,把 route.rules 里由「默认出站」字段写入的 binding(_nb_binding 标记)
+// 一起清掉,免得变成"指向不存在 inbound tag"的悬空规则导致 sing-box 启动失败。
+const cleanupInboundBinding = async (tag: string) => {
+  const cfg = JSON.parse(JSON.stringify(Data().config || {}))
+  const rules = cfg?.route?.rules
+  if (!Array.isArray(rules) || rules.length === 0) return
+  const filtered = rules.filter((r: any) => {
+    if (!r?._nb_binding) return true
+    if (Array.isArray(r.inbound) && r.inbound.includes(tag)) return false
+    return true
+  })
+  if (filtered.length !== rules.length) {
+    cfg.route.rules = filtered
+    await Data().save('config', 'set', cfg)
+  }
 }
 
 const purgeAll = async () => {
@@ -463,15 +620,24 @@ const closeStats = () => { stats.value.visible = false }
 // ---------- 启用/禁用 ----------
 const toggling = ref<Record<number, boolean>>({})
 const toggleEnable = async (row: any, v: boolean) => {
-  toggling.value = { ...toggling.value, [row.id]: true }
+  // 乐观更新(同 InboundClients):立即把 row.enable=v,switch 视觉马上锁定。
+  // 否则 await save 期间 :model-value 没变,EP 会把 switch 视觉回退,用户
+  // 体感"开关切了又自己跳回去"。失败时回滚。
+  const original = row.enable
+  row.enable = v
+  toggling.value[row.id] = true
   try {
     const inboundArray = await Data().loadInbounds([row.id])
     const inbound = inboundArray[0]
+    if (!inbound) {
+      row.enable = original
+      return
+    }
     inbound.enable = v
     const ok = await Data().save('inbounds', 'edit', inbound)
-    if (ok) row.enable = v
+    if (!ok) row.enable = original
   } finally {
-    toggling.value = { ...toggling.value, [row.id]: false }
+    delete toggling.value[row.id]
   }
 }
 
@@ -482,9 +648,94 @@ const trafficOf = (tag: string) => {
   if (!t) return 0
   return (t.up || 0) + (t.down || 0)
 }
+// 速率采样:每次 loadTraffic 后跟上次的总和比对,算 KB/s。
+// 第一次没有 baseline 显示 0,从第二次开始有真实速率。
+const lastSample = ref<{ up: number; down: number; ts: number } | null>(null)
+const rateUp = ref('0 B')
+const rateDown = ref('0 B')
+
 const loadTraffic = async () => {
   const r = await HttpUtils.get('api/statsTotals', { resource: 'inbound' })
-  if (r.success) traffic.value = r.obj || {}
+  if (!r.success) return
+  const incoming = r.obj || {}
+  for (const k of Object.keys(traffic.value)) {
+    if (!(k in incoming)) delete traffic.value[k]
+  }
+  Object.assign(traffic.value, incoming)
+
+  // 算速率(基于本次跟上次采样的差值 / 时间间隔)
+  const nowUp = Object.values(traffic.value).reduce((s, t) => s + (t.up || 0), 0)
+  const nowDown = Object.values(traffic.value).reduce((s, t) => s + (t.down || 0), 0)
+  const nowTs = Date.now()
+  if (lastSample.value && nowTs > lastSample.value.ts) {
+    const dt = (nowTs - lastSample.value.ts) / 1000
+    const dUp = Math.max(0, nowUp - lastSample.value.up) / dt
+    const dDown = Math.max(0, nowDown - lastSample.value.down) / dt
+    rateUp.value = HumanReadable.sizeFormat(dUp)
+    rateDown.value = HumanReadable.sizeFormat(dDown)
+  }
+  lastSample.value = { up: nowUp, down: nowDown, ts: nowTs }
+}
+
+// 当前活跃连接数 — 5s 拉一次(开销小,实时性强)
+const connStats = ref({ tcp: 0, udp: 0 })
+const loadConnStats = async () => {
+  const r = await HttpUtils.get('api/connStats')
+  if (r.success && r.obj) connStats.value = { tcp: r.obj.tcp || 0, udp: r.obj.udp || 0 }
+}
+
+// ---------- 链路延迟探测(只对绑了中转的入站,跨入站按 outbound tag 去重) ----------
+interface CheckResult {
+  loading?: boolean
+  success: boolean
+  data?: { OK?: boolean; Delay?: number; Error?: string } | null
+  errorMessage?: string
+}
+const checkResults = ref<Record<string, CheckResult>>({})
+const setCheckResult = (tag: string, r: CheckResult) => { checkResults.value[tag] = r }
+const probeOutbound = async (tag: string) => {
+  if (!tag) return
+  setCheckResult(tag, { loading: true, success: false })
+  const msg = await HttpUtils.get('api/checkOutbound', { tag })
+  const success = msg.success && msg.obj?.OK
+  const errorMessage = success ? undefined : (msg.obj?.Error ?? msg.msg ?? '')
+  setCheckResult(tag, { loading: false, success, data: msg.obj ?? null, errorMessage })
+}
+const manualProbe = (tag: string) => {
+  if (!tag) return
+  if (checkResults.value[tag]?.loading) return
+  probeOutbound(tag)
+}
+const latencyType = (ms: number): 'success' | 'warning' | 'danger' => {
+  if (ms < 200) return 'success'
+  if (ms < 600) return 'warning'
+  return 'danger'
+}
+
+const PROBE_INTERVAL_MS = 10000
+const PROBE_CONCURRENCY = 4
+let probeRunning = false
+let probeTimer: any
+const probeOnce = async () => {
+  if (probeRunning) return
+  probeRunning = true
+  try {
+    // 收集所有"中转目标 outbound tag"(去重),只测在用的
+    const targets = new Set<string>()
+    for (const i of inbounds.value) {
+      const r = relayOf((i as any).tag)
+      if (r && !checkResults.value[r]?.loading) targets.add(r)
+    }
+    if (targets.size === 0) return
+    const arr = [...targets]
+    let idx = 0
+    const next = async () => {
+      while (idx < arr.length) await probeOutbound(arr[idx++])
+    }
+    await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, arr.length) }, () => next()))
+  } finally {
+    probeRunning = false
+  }
 }
 
 // ---------- 防火墙状态 ----------
@@ -528,11 +779,22 @@ const loadFirewall = async () => {
 
 // ---------- lifecycle ----------
 let trafficTimer: any
+let connTimer: any
 onMounted(async () => {
-  await Promise.all([loadTraffic(), loadFirewall()])
-  trafficTimer = setInterval(() => { if (!document.hidden) loadTraffic() }, 15000)
+  await Promise.all([loadTraffic(), loadFirewall(), loadConnStats()])
+  // 流量 10s 一次(跟 SaveStats cron 节拍对齐,反应更快)
+  trafficTimer = setInterval(() => { if (!document.hidden) loadTraffic() }, 10000)
+  // TCP/UDP 连接数 5s 一次(开销小,要实时)
+  connTimer = setInterval(() => { if (!document.hidden) loadConnStats() }, 5000)
+  // 进页面立刻先来一轮链路延迟探测,免得用户干等 10s 才有数据
+  probeOnce()
+  probeTimer = setInterval(() => { if (!document.hidden) probeOnce() }, PROBE_INTERVAL_MS)
 })
-onBeforeUnmount(() => { if (trafficTimer) clearInterval(trafficTimer) })
+onBeforeUnmount(() => {
+  if (trafficTimer) clearInterval(trafficTimer)
+  if (connTimer) clearInterval(connTimer)
+  if (probeTimer) clearInterval(probeTimer)
+})
 </script>
 
 <style scoped>
@@ -687,4 +949,27 @@ onBeforeUnmount(() => { if (trafficTimer) clearInterval(trafficTimer) })
   color: var(--nc-text-muted);
   font-weight: 400;
 }
+
+/* 在线 IP popover */
+.ip-clickable { cursor: pointer; transition: transform 0.1s; }
+.ip-clickable:hover { transform: scale(1.05); }
+.ip-pop { display: flex; flex-direction: column; gap: 8px; }
+.ip-pop__head { font-size: 12.5px; color: var(--nc-text-1); }
+.ip-pop__loading, .ip-pop__empty { font-size: 12px; color: var(--nc-text-muted); padding: 8px 0; text-align: center; }
+.ip-pop__list { max-height: 200px; overflow-y: auto; border: 1px solid var(--nc-border-soft); border-radius: var(--radius-sm); padding: 6px 8px; }
+.ip-pop__item { font-size: 12px; line-height: 1.7; color: var(--nc-text-1); }
+
+/* 链路延迟 cell:整格可点触发重测,跟出站页样式一致 */
+.delay-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  color: var(--nc-text-muted);
+}
+.delay-cell.is-clickable { cursor: pointer; transition: background-color 0.12s; }
+.delay-cell.is-clickable:hover { background-color: var(--nc-primary-soft); color: var(--nc-primary); }
 </style>

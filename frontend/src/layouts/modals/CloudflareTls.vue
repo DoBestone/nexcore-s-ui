@@ -5,7 +5,7 @@
     @close="onClose"
     class="constrained-dialog is-medium"
     :align-center="false"
-    :title="$t('tls.cf.title')"
+    :title="mode === 'panel' ? '面板 SSL — Cloudflare 一键签发' : $t('tls.cf.title')"
     destroy-on-close
   >
     <el-steps :active="step" finish-status="success" simple class="cf-steps">
@@ -50,10 +50,19 @@
       </el-form-item>
       <el-form-item :label="$t('tls.cf.prefixMode')">
         <el-radio-group v-model="form.prefixMode">
+          <el-radio v-if="mode !== 'panel'" value="wildcard">{{ $t('tls.cf.prefixWildcard') }}</el-radio>
           <el-radio value="random">{{ $t('tls.cf.prefixRandom') }}</el-radio>
           <el-radio value="custom">{{ $t('tls.cf.prefixCustom') }}</el-radio>
-          <el-radio value="apex">{{ $t('tls.cf.prefixApex') }}</el-radio>
+          <el-radio v-if="mode !== 'panel'" value="apex">{{ $t('tls.cf.prefixApex') }}</el-radio>
         </el-radio-group>
+        <p v-if="mode === 'panel'" class="form-hint">面板必须有具体子域名(随机 / 自定义),wildcard 和根域不适合面板场景</p>
+      </el-form-item>
+      <el-form-item v-if="form.prefixMode === 'wildcard'" :label="$t('tls.cf.wildcardLabel')">
+        <el-input v-model="form.wildcardLabel" :placeholder="$t('tls.cf.wildcardLabelPlaceholder')">
+          <template #append>.{{ zoneNameOf(form.zoneId) }}</template>
+        </el-input>
+        <p class="form-hint">{{ $t('tls.cf.wildcardLabelHint') }}</p>
+        <p v-if="form.wildcardLabel" class="form-hint mono">→ *.{{ form.wildcardLabel }}.{{ zoneNameOf(form.zoneId) }}</p>
       </el-form-item>
       <el-form-item v-if="form.prefixMode === 'random'" :label="$t('tls.cf.prefixSeed')">
         <el-input v-model="form.prefix" :placeholder="$t('tls.cf.prefixSeedPlaceholder')" />
@@ -69,14 +78,15 @@
           </template>
         </el-input>
       </el-form-item>
-      <el-form-item>
+      <el-form-item v-if="form.prefixMode !== 'wildcard'">
         <el-checkbox v-model="form.proxied">{{ $t('tls.cf.proxied') }}</el-checkbox>
         <p class="form-hint">{{ $t('tls.cf.proxiedHint') }}</p>
       </el-form-item>
     </el-form>
 
     <el-form label-position="top" v-if="step === 2">
-      <el-form-item :label="$t('tls.cf.tlsName')">
+      <!-- inbound 模式:让用户给 TLS 配置起个名字 -->
+      <el-form-item v-if="mode !== 'panel'" :label="$t('tls.cf.tlsName')">
         <el-input v-model="form.tlsName" :placeholder="result.fqdn || 'cf-auto'" />
       </el-form-item>
       <el-alert v-if="result.fqdn" type="success" :closable="false" show-icon class="cf-alert">
@@ -84,7 +94,11 @@
           <span>{{ $t('tls.cf.dnsReady') }}: <span class="mono">{{ result.fqdn }} → {{ form.ip }}</span></span>
         </template>
       </el-alert>
-      <p class="form-hint">{{ $t('tls.cf.issueExplain') }}</p>
+      <p v-if="mode === 'panel'" class="form-hint">
+        点「签发并启用 HTTPS」 → 后端会跑 ACME DNS-01 + 写 webCertFile/webKeyFile/webDomain settings + 自动重启面板。
+        签发约需 30s ~ 2min,完成后页面自动跳转到 <code class="mono">https://{{ result.fqdn }}</code>
+      </p>
+      <p v-else class="form-hint">{{ $t('tls.cf.issueExplain') }}</p>
     </el-form>
 
     <template #footer>
@@ -96,21 +110,28 @@
       <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="!canApplyDns" @click="onApplyDns">
         {{ $t('tls.cf.applyDns') }}
       </el-button>
-      <el-button v-if="step === 2" type="primary" :loading="loading" :disabled="!result.fqdn" @click="onIssue">
+      <el-button v-if="step === 2 && mode !== 'panel'" type="primary" :loading="loading" :disabled="!result.fqdn" @click="onIssue">
         {{ $t('tls.cf.issue') }}
+      </el-button>
+      <el-button v-if="step === 2 && mode === 'panel'" type="primary" :loading="loading" :disabled="!result.fqdn" @click="onIssuePanel">
+        签发并启用 HTTPS
       </el-button>
     </template>
   </el-dialog>
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import HttpUtils from '@/plugins/httputil'
 import { ElMessage } from 'element-plus'
 import { i18n } from '@/locales'
 import Data from '@/store/modules/data'
 
-const props = defineProps<{ visible: boolean }>()
+// mode='inbound'(默认):为 sing-box 入站签证书,生成 model.Tls 行
+// mode='panel': 为面板自己签 SSL,自动写 webCertFile/webKeyFile/webDomain + 重启
+const props = withDefaults(defineProps<{ visible: boolean; mode?: 'inbound' | 'panel' }>(), {
+  mode: 'inbound',
+})
 const emit = defineEmits<{ close: []; 'update:modelValue': [v: boolean]; created: [id: number] }>()
 
 const step = ref(0)
@@ -120,9 +141,10 @@ interface Form {
   token: string
   email: string
   zoneId: string
-  prefixMode: 'random' | 'custom' | 'apex'
+  prefixMode: 'wildcard' | 'random' | 'custom' | 'apex'
   prefix: string
   customName: string
+  wildcardLabel: string
   ip: string
   proxied: boolean
   fqdn: string
@@ -134,9 +156,11 @@ const initialForm = (): Form => ({
   token: '',
   email: '',
   zoneId: '',
-  prefixMode: 'random',
+  // 默认通配符 — 机场场景一证多入站,后续不用再调 CF
+  prefixMode: 'wildcard',
   prefix: '',
   customName: '',
+  wildcardLabel: '',
   ip: '',
   proxied: false,
   fqdn: '',
@@ -183,6 +207,7 @@ const zoneNameOf = (id: string) => zones.value.find((z) => z.id === id)?.name ||
 const canApplyDns = computed(() => {
   if (!form.value.zoneId || !form.value.ip) return false
   if (form.value.prefixMode === 'custom' && !form.value.customName) return false
+  if (form.value.prefixMode === 'wildcard' && !form.value.wildcardLabel.trim()) return false
   return true
 })
 
@@ -215,12 +240,15 @@ const onVerify = async () => {
 }
 
 const detectIp = async () => {
-  // 用 ipify 直拉公网 IP - 浏览器环境直连,与面板无关
-  try {
-    const r = await fetch('https://api64.ipify.org?format=json')
-    const j = await r.json()
-    if (j.ip) form.value.ip = j.ip
-  } catch {
+  // 必须走后端 — 前端 fetch 拿到的是用户浏览器的出口 IP(家宽/跳板/CDN),
+  // 不是面板服务器的公网 IP。后端 /api/cfDetectIp 在服务器侧并发查多个
+  // echo-IP 服务,返回首个成功的。
+  loading.value = true
+  const r = await HttpUtils.get('api/cfDetectIp')
+  loading.value = false
+  if (r.success && r.obj?.ip) {
+    form.value.ip = r.obj.ip
+  } else {
     ElMessage.error(i18n.global.t('tls.cf.detectIpFailed'))
   }
 }
@@ -239,6 +267,11 @@ const onApplyDns = async () => {
     payload.prefix = form.value.prefix
   } else if (form.value.prefixMode === 'custom') {
     payload.name = form.value.customName
+  } else if (form.value.prefixMode === 'wildcard') {
+    // wildcard A 记录:name = *.<label>。CF 不允许 wildcard 记录走橙色云朵反代,
+    // 所以这里强制 proxied=false 覆盖用户勾选(UI 层已隐藏复选框)。
+    payload.name = '*.' + form.value.wildcardLabel.trim()
+    payload.proxied = false
   } else {
     payload.name = '@'
   }
@@ -271,6 +304,35 @@ const onIssue = async () => {
   }
 }
 
+// 面板 SSL 签发 — 后端 panelSslIssue 一站式:
+// 跑 ACME DNS-01(CF Token 已存)+ 写 webCertFile/webKeyFile/webDomain
+// + 异步重启面板。签发后跳转 https。
+const onIssuePanel = async () => {
+  loading.value = true
+  const tip = ElMessage({
+    type: 'info',
+    duration: 0,
+    showClose: false,
+    message: `正在向 Let's Encrypt 申请 ${result.value.fqdn} 的证书,DNS 传播 + 签发约需 30s ~ 2min…`,
+  })
+  try {
+    const r = await HttpUtils.post('api/panelSslIssue', { domain: result.value.fqdn })
+    if (r.success) {
+      ElMessage.success(`签发成功!2 秒后面板自动重启,届时跳转 https://${result.value.fqdn}…`)
+      // 让用户看一会成功提示再跳。port/path 从当前 URL 推 — 仍是同一台机器
+      const port = window.location.port || '3095'
+      const path = window.location.pathname.startsWith('/app') ? '/app/' : '/'
+      setTimeout(() => {
+        window.location.href = `https://${result.value.fqdn}:${port}${path}`
+      }, 4000)
+      onClose()
+    }
+  } finally {
+    tip.close()
+    loading.value = false
+  }
+}
+
 watch(() => props.visible, (v) => {
   if (v) {
     step.value = 0
@@ -279,6 +341,13 @@ watch(() => props.visible, (v) => {
     result.value = { fqdn: '', recordId: '' }
     loadSavedCreds()
   }
+})
+
+// onMounted 兜底:调用方用 v-if 渲染 wizard 时(如入站编辑里的「自动签发」),
+// 组件首次挂载时 props.visible 已经是 true,但 watch 没有 immediate,
+// loadSavedCreds 永远不会跑 → 表单显示空白。这里 onMounted 强制跑一次。
+onMounted(() => {
+  if (props.visible) loadSavedCreds()
 })
 </script>
 

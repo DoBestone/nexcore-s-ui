@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -62,12 +63,19 @@ func (s *WarpService) RegisterWarp(ep *model.Endpoint) error {
 	req.Header.Add("CF-Client-Version", "a-7.21-0721")
 	req.Header.Add("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		return err
+	if err != nil {
+		return common.NewError("Warp 注册请求失败: ", err.Error())
 	}
 	defer resp.Body.Close()
+	// 旧版 `if err != nil || status != 200 { return err }` 当 err==nil &&
+	// status!=200 时返回 nil(假装成功),前端就把空壳 endpoint 入库,
+	// 接着 sing-box 启动失败(私钥/peer 全空)。这里把响应体回传出去。
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return common.NewErrorf("Warp 注册被 Cloudflare 拒绝(HTTP %d):%s", resp.StatusCode, string(body))
+	}
 	buffer := bytes.NewBuffer(make([]byte, 8192))
 	buffer.Reset()
 	_, err = buffer.ReadFrom(resp.Body)
