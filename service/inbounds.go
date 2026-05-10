@@ -62,6 +62,8 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 	totals, _ := (&StatsService{}).GetTotals("inbound")
 	inboundRelay := buildInboundRelayMap()
 	outboundDisplay := buildOutboundDisplayMap()
+	// 全局 link_addr_source — 用来给每个 inbound 算 effective_addr_source
+	globalLinkSrc := (&SettingService{}).GetLinkAddrSource()
 
 	var data []map[string]interface{}
 	for _, inbound := range inbounds {
@@ -112,8 +114,10 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 			}
 		}
 		// link_addr_source — 入站级覆盖全局 settings.linkAddrSource。空表示
-		// 跟随全局,前端在编辑器里展示时优先读这个字段。
+		// 跟随全局。effective_addr_source 是 resolve 后的最终值(panel|ip|tls),
+		// 入站列表 UI 直接展示这个,免前端再 join settings。
 		inbData["link_addr_source"] = inbound.LinkAddrSource
+		inbData["effective_addr_source"] = resolveAddrSource(inbound.LinkAddrSource, globalLinkSrc)
 		// 入站列表 UI 直接读这三个字段,免去前端跨 onlines/stats/config 三处 join。
 		if t, ok := totals[inbound.Tag]; ok {
 			inbData["total_up"] = t["up"]

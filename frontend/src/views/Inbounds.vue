@@ -184,6 +184,15 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="Server 来源" width="140" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="addrSourceTooltip(row)" placement="top">
+              <el-tag :type="addrSourceTag(row).type" size="small" effect="plain">
+                {{ addrSourceTag(row).label }}
+              </el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column label="中转" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="relayOf(row.tag)" type="warning" size="small" effect="plain" class="mono">
@@ -295,6 +304,15 @@
               <span class="traffic-detail">↑ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.up ?? 0) }} / ↓ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.down ?? 0) }}</span>
             </span>
             <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Server 来源" width="140" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="addrSourceTooltip(row)" placement="top">
+              <el-tag :type="addrSourceTag(row).type" size="small" effect="plain">
+                {{ addrSourceTag(row).label }}
+              </el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="中转" width="220" show-overflow-tooltip>
@@ -468,6 +486,34 @@ const relayOf = (tag: string): string => {
 // relayDisplayName 给入站列表的「中转」列追加出站的「中转名称」(display_name)。
 // 例如出站 tag="hk-relay" + display_name="香港落地" → 列里显示 "→ hk-relay · 香港落地",
 // 没填中转名称时只显示 tag。
+// addrSourceTag — 给入站列表「Server 来源」列出显示标签 + tag 颜色。
+// 优先级:row.link_addr_source(入站级)→ effective_addr_source(后端 resolve)→ panel(兜底)
+const ADDR_SRC_LABEL: Record<string, string> = {
+  panel: '面板域名',
+  ip: '服务器 IP',
+  tls: 'TLS server_name',
+}
+const ADDR_SRC_TYPE: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'primary'> = {
+  panel: 'success',
+  ip: 'warning',
+  tls: 'info',
+}
+const addrSourceTag = (row: any): { label: string; type: 'success' | 'warning' | 'danger' | 'info' | 'primary' } => {
+  const inb = (row?.link_addr_source ?? '').trim()
+  const eff = (row?.effective_addr_source ?? 'panel').trim()
+  if (!inb) {
+    // 跟随全局 — 标签前缀 "全局·" 让用户明确这是 fallback
+    return { label: '全局·' + (ADDR_SRC_LABEL[eff] ?? eff), type: 'primary' }
+  }
+  return { label: ADDR_SRC_LABEL[inb] ?? inb, type: ADDR_SRC_TYPE[inb] ?? 'info' }
+}
+const addrSourceTooltip = (row: any): string => {
+  const inb = (row?.link_addr_source ?? '').trim()
+  const eff = (row?.effective_addr_source ?? 'panel').trim()
+  if (!inb) return `跟随全局设置(当前生效:${ADDR_SRC_LABEL[eff] ?? eff});改入站编辑里的「分享链接 server 字段来源」覆盖`
+  return `本入站已单独覆盖为:${ADDR_SRC_LABEL[inb] ?? inb}`
+}
+
 const relayDisplayName = (inboundTag: string): string => {
   const ot = relayOf(inboundTag)
   if (!ot) return ''

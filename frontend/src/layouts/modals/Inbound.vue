@@ -782,6 +782,9 @@ watch(() => inbound.value.tag, refreshJson)
 watch(() => inbound.value.listen, refreshJson)
 watch(() => inbound.value.listen_port, refreshJson)
 watch(() => inbound.value.tls_id, refreshJson)
+// link_addr_source 不在 watch 里,saveChanges 用 inboundJson 覆盖时会被丢字段,
+// DB 保存后再编辑显示空(=跟随全局)。加 watch 让 radio 变化时同步进 inboundJson。
+watch(() => inbound.value.link_addr_source, refreshJson)
 watch(() => inbound.value.method, refreshJson)
 watch(() => inbound.value.password, refreshJson)
 watch(() => inbound.value.up_mbps, refreshJson)
