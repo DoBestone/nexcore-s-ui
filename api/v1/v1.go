@@ -21,6 +21,7 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -163,6 +164,7 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	authed.POST("/system/restart-panel", a.restartPanel)
 	authed.GET("/system/listening-ports", a.listListeningPorts)
 	authed.GET("/system/check-port", a.checkPort)
+	authed.GET("/system/check-update", a.checkUpdate)
 
 	// 分享链接 — 给主控/前端拿 link 和 qrcode 用,不走订阅协议
 	// host 参数:?host=mydomain.com 强制覆盖 link 里的服务器字段
@@ -1201,6 +1203,85 @@ func (a *Controller) checkPort(c *gin.Context) {
 		}
 	}
 	OK(c, gin.H{"port": n, "inUse": false})
+}
+
+// checkUpdate 拉 GitHub latest release 比对当前版本 — 后端做 fetch 是为了
+// 绕开 CORS,主控/前端不必直接 hit GitHub。返:
+//   { current, latest, hasUpdate, latestUrl, latestPublishedAt, upgradeCmd }
+// 不做自动 panel 重启 — sui binary 自更新涉及 systemd reload,风险太高。
+// 用户拿到 upgradeCmd 后在 SSH 终端跑即可。
+func (a *Controller) checkUpdate(c *gin.Context) {
+	type ghRelease struct {
+		TagName     string `json:"tag_name"`
+		HTMLURL     string `json:"html_url"`
+		PublishedAt string `json:"published_at"`
+		Prerelease  bool   `json:"prerelease"`
+	}
+	current := config.GetVersion()
+
+	// 用 /releases?per_page=10 而不是 /latest — latest 跳过 prerelease,但
+	// 我们想拿"最新一条非 draft 的 stable tag",per_page=10 + 过滤 prerelease 更稳
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/DoBestone/nexcore-s-ui/releases?per_page=10", nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "nexcore-s-ui/"+current)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		BadRequest(c, "github_unreachable", "无法访问 GitHub: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		BadRequest(c, "github_error", fmt.Sprintf("GitHub 返回 %d", resp.StatusCode))
+		return
+	}
+	var rels []ghRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rels); err != nil {
+		BadRequest(c, "decode_failed", err.Error())
+		return
+	}
+	var latest *ghRelease
+	for i := range rels {
+		if !rels[i].Prerelease && rels[i].TagName != "" {
+			latest = &rels[i]
+			break
+		}
+	}
+	if latest == nil {
+		BadRequest(c, "no_release", "GitHub 暂无 stable release")
+		return
+	}
+	latestVer := strings.TrimPrefix(latest.TagName, "v")
+	hasUpdate := semverCompare(current, latestVer) < 0
+
+	OK(c, gin.H{
+		"current":            current,
+		"latest":             latestVer,
+		"latestTag":          latest.TagName,
+		"hasUpdate":          hasUpdate,
+		"latestUrl":          latest.HTMLURL,
+		"latestPublishedAt":  latest.PublishedAt,
+		"upgradeCmd":         "bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh)",
+	})
+}
+
+// semverCompare a vs b: <0=a 更老, 0=相等, >0=a 更新。只比 X.Y.Z 三段。
+func semverCompare(a, b string) int {
+	pa := strings.SplitN(a, ".", 3)
+	pb := strings.SplitN(b, ".", 3)
+	for i := 0; i < 3; i++ {
+		var x, y int
+		if i < len(pa) {
+			x, _ = strconv.Atoi(strings.SplitN(pa[i], "-", 2)[0])
+		}
+		if i < len(pb) {
+			y, _ = strconv.Atoi(strings.SplitN(pb[i], "-", 2)[0])
+		}
+		if x != y {
+			return x - y
+		}
+	}
+	return 0
 }
 
 // listCerts:x-ui 的 /certs 直接映射 s-ui 的 model.Tls 表(s-ui 的"证书"

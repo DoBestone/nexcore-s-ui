@@ -4,11 +4,12 @@ on:
   workflow_dispatch:
   release:
     types: [published]
+  # 故意去掉 `push: tags` —— `gh release create` 后的 release published
+  # 事件已经会触发本 workflow,如果再额外听 tag push 会让相同的 commit 跑
+  # 两遍,第二遍上传同名 asset 时撞 422 "already_exists"。
   push:
     branches:
       - main
-    tags:
-      - "*"
     paths:
       - '.github/workflows/release.yml'
       - 'frontend/**'
@@ -17,6 +18,12 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'nexcore-s-ui.service'
+
+# 同名 ref 上同时只跑一个 release,后来的取消 — 防止手动重跑或 tag/branch
+# 双触发并发上传到同一 release 撞 already_exists。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: "25"

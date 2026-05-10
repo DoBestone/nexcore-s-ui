@@ -31,12 +31,53 @@
       </div>
 
       <div class="hero__actions">
+        <el-button @click="checkUpdate" :icon="UploadFilled" size="small" :loading="updating">检查更新</el-button>
         <el-button @click="logModal.visible = true" :icon="Document" size="small">日志</el-button>
         <el-button @click="backupModal.visible = true" :icon="DocumentCopy" size="small">备份</el-button>
         <el-button @click="usageStatsModal.visible = true" :icon="DataAnalysis" size="small">统计</el-button>
         <el-button v-if="sbdRunning" type="warning" plain :icon="Refresh" size="small" :loading="restarting" @click="restartSingbox">重启内核</el-button>
       </div>
     </div>
+
+    <!-- 升级提示 dialog — checkUpdate 后弹出,显示版本对比 + 升级命令(只读)。
+         不做面板自动重启升级:sui binary 自更新涉及 systemd reload + 自我替换,
+         风险太高;让操作员在 SSH 终端跑 update.sh 才安全。 -->
+    <el-dialog v-model="updateDialog.visible" title="检查更新" width="540">
+      <div v-if="updateDialog.loading" style="text-align:center;padding:24px">
+        <el-icon class="is-loading" :size="22"><Loading /></el-icon>
+        <div style="margin-top:8px;color:var(--nc-text-muted)">正在拉取 GitHub 最新 release…</div>
+      </div>
+      <div v-else-if="updateDialog.error" class="upd-err">
+        <el-alert :title="updateDialog.error" type="error" :closable="false" show-icon />
+      </div>
+      <div v-else>
+        <div class="upd-row"><span class="upd-k">当前版本</span><span class="mono upd-v">v{{ updateDialog.current }}</span></div>
+        <div class="upd-row"><span class="upd-k">最新 stable</span>
+          <span class="mono upd-v">{{ updateDialog.latestTag }}</span>
+          <el-tag v-if="updateDialog.hasUpdate" type="warning" size="small">有更新</el-tag>
+          <el-tag v-else type="success" size="small">已是最新</el-tag>
+        </div>
+        <div v-if="updateDialog.publishedAt" class="upd-row">
+          <span class="upd-k">发布时间</span>
+          <span class="mono upd-v">{{ new Date(updateDialog.publishedAt).toLocaleString() }}</span>
+        </div>
+        <el-divider />
+        <div v-if="updateDialog.hasUpdate">
+          <p style="margin:0 0 6px;font-size:13px;color:var(--nc-text-1);font-weight:600">SSH 终端跑以下命令完成升级(面板和内核同时升级):</p>
+          <div class="upd-cmd">
+            <code class="mono">{{ updateDialog.upgradeCmd }}</code>
+            <el-button size="small" :icon="CopyDocument" @click="copyCmd">复制</el-button>
+          </div>
+          <p style="margin:8px 0 0;font-size:12px;color:var(--nc-text-muted)">
+            ⚠️ sing-box 内核是编译进 sui 二进制的 Go 模块,不能独立升级 — 升级面板会同时把内核升到该 release 锁定的版本。
+          </p>
+        </div>
+        <div v-else style="font-size:13px;color:var(--nc-text-muted)">面板已是最新版,无需升级。</div>
+        <div style="margin-top:10px;text-align:right">
+          <el-button size="small" @click="openReleasePage">在 GitHub 查看 Release Notes →</el-button>
+        </div>
+      </div>
+    </el-dialog>
 
     <!-- KPI 卡 + 实时网速 sparkline -->
     <div class="kpis">
@@ -89,7 +130,8 @@ import { computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref } fr
 import HttpUtils from '@/plugins/httputil'
 import { HumanReadable } from '@/plugins/utils'
 import Data from '@/store/modules/data'
-import { Document, DocumentCopy, DataAnalysis, Refresh, Warning } from '@element-plus/icons-vue'
+import { Document, DocumentCopy, DataAnalysis, Refresh, Warning, UploadFilled, CopyDocument, Loading } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 const Logs = defineAsyncComponent(() => import('@/layouts/modals/Logs.vue'))
 const Backup = defineAsyncComponent(() => import('@/layouts/modals/Backup.vue'))
@@ -168,25 +210,31 @@ function cmpSemver(a: string, b: string): number {
 }
 
 // ---------- Inline subcomponents ----------
-// Ring: 极简 SVG 进度环。12px 宽圈,无依赖。
-const Ring = (props: { value: number; color: string }) => {
+// Ring: 极简 SVG 进度环。Vue 3 函数组件必须显式声明 props,否则
+// 父组件传的属性会落到 attrs 上,props 参数全 undefined。
+const Ring: any = (props: { value: number; color: string }) => {
+  const value = Number(props?.value ?? 0)
+  const color = props?.color ?? 'var(--el-color-primary)'
   const r = 18, c = 2 * Math.PI * r
-  const offset = c - (Math.max(0, Math.min(100, props.value)) / 100) * c
+  const offset = c - (Math.max(0, Math.min(100, value)) / 100) * c
   return h('svg', { width: 44, height: 44, viewBox: '0 0 44 44', class: 'ring' }, [
     h('circle', { cx: 22, cy: 22, r, fill: 'none', stroke: 'var(--el-fill-color)', 'stroke-width': 4 }),
     h('circle', {
-      cx: 22, cy: 22, r, fill: 'none', stroke: props.color, 'stroke-width': 4,
+      cx: 22, cy: 22, r, fill: 'none', stroke: color, 'stroke-width': 4,
       'stroke-dasharray': c, 'stroke-dashoffset': offset, 'stroke-linecap': 'round',
       transform: 'rotate(-90 22 22)', style: 'transition: stroke-dashoffset 0.3s ease, stroke 0.3s'
     }),
   ])
 }
+Ring.props = ['value', 'color']
 
 // Sparkline: 双线 SVG 折线(↑ 上行 实色 / ↓ 下行 虚线)。固定高度 32px,
 // 宽度自适应父级。max 取两线最大值,缺数据时画 0。
-const Sparkline = (props: { seriesUp: number[]; seriesDown: number[] }) => {
+const Sparkline: any = (props: { seriesUp: number[]; seriesDown: number[] }) => {
+  const seriesUp = Array.isArray(props?.seriesUp) ? props.seriesUp : []
+  const seriesDown = Array.isArray(props?.seriesDown) ? props.seriesDown : []
   const W = 200, H = 32
-  const all = [...props.seriesUp, ...props.seriesDown]
+  const all = [...seriesUp, ...seriesDown]
   const max = Math.max(1, ...all)
   const path = (arr: number[]) => {
     if (arr.length === 0) return ''
@@ -198,10 +246,11 @@ const Sparkline = (props: { seriesUp: number[]; seriesDown: number[] }) => {
     }).join(' ')
   }
   return h('svg', { class: 'spark', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none' }, [
-    h('path', { d: path(props.seriesDown), fill: 'none', stroke: 'var(--el-color-primary)', 'stroke-width': 1.5, 'stroke-dasharray': '3,2', opacity: 0.7 }),
-    h('path', { d: path(props.seriesUp), fill: 'none', stroke: 'var(--el-color-success)', 'stroke-width': 1.5 }),
+    h('path', { d: path(seriesDown), fill: 'none', stroke: 'var(--el-color-primary)', 'stroke-width': 1.5, 'stroke-dasharray': '3,2', opacity: 0.7 }),
+    h('path', { d: path(seriesUp), fill: 'none', stroke: 'var(--el-color-success)', 'stroke-width': 1.5 }),
   ])
 }
+Sparkline.props = ['seriesUp', 'seriesDown']
 
 // ---------- network ----------
 let sysTimer: ReturnType<typeof setInterval> | null = null
@@ -255,6 +304,63 @@ onBeforeUnmount(() => {
 const logModal = ref({ visible: false })
 const backupModal = ref({ visible: false })
 const usageStatsModal = ref({ visible: false })
+
+// ---------- 检查更新 ----------
+const updating = ref(false)
+const updateDialog = ref<{
+  visible: boolean
+  loading: boolean
+  error: string
+  current: string
+  latest: string
+  latestTag: string
+  hasUpdate: boolean
+  publishedAt: string
+  latestUrl: string
+  upgradeCmd: string
+}>({ visible: false, loading: false, error: '', current: '', latest: '', latestTag: '', hasUpdate: false, publishedAt: '', latestUrl: '', upgradeCmd: '' })
+
+const checkUpdate = async () => {
+  updating.value = true
+  updateDialog.value = { ...updateDialog.value, visible: true, loading: true, error: '' }
+  try {
+    // /api/v1/* 走 Bearer token,但 panel 内部用 cookie session — 用 v0 等价
+    // (走同一会话)更稳。后端我加的是 v1 路由,但前端没 token cache;
+    // 用 fetch /api/v1/system/check-update 仍然能命中 — v1 中间件接受 cookie?
+    // 不:v1 强制 Bearer。所以这里直接前端 fetch GitHub —— 退回原始方案,
+    // CORS 对 raw.githubusercontent.com / api.github.com 是允许的。
+    const r = await fetch('https://api.github.com/repos/DoBestone/nexcore-s-ui/releases?per_page=10', {
+      headers: { 'Accept': 'application/vnd.github+json' }
+    })
+    if (!r.ok) throw new Error('GitHub 返回 ' + r.status)
+    const rels: any[] = await r.json()
+    const stable = rels.find(x => !x.prerelease && x.tag_name)
+    if (!stable) throw new Error('GitHub 暂无 stable release')
+    const latestTag: string = stable.tag_name
+    const latest = latestTag.replace(/^v/, '')
+    const cur = panelVersion.value
+    updateDialog.value = {
+      visible: true,
+      loading: false,
+      error: '',
+      current: cur,
+      latest,
+      latestTag,
+      hasUpdate: cmpSemver(cur, latest) < 0,
+      publishedAt: stable.published_at || '',
+      latestUrl: stable.html_url || '',
+      upgradeCmd: 'bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh)',
+    }
+  } catch (e: any) {
+    updateDialog.value = { ...updateDialog.value, loading: false, error: '检查失败: ' + (e?.message || e) }
+  }
+  updating.value = false
+}
+const copyCmd = async () => {
+  try { await navigator.clipboard.writeText(updateDialog.value.upgradeCmd); ElMessage.success('已复制') }
+  catch { ElMessage.warning('复制失败,请手动选中') }
+}
+const openReleasePage = () => { window.open(updateDialog.value.latestUrl || 'https://github.com/DoBestone/nexcore-s-ui/releases', '_blank') }
 </script>
 
 <style scoped>
@@ -326,6 +432,13 @@ const usageStatsModal = ref({ visible: false })
 .kpi__pair-v { font-size: 16px; font-weight: 700; color: var(--nc-text-1); font-variant-numeric: tabular-nums; }
 
 .spark { width: 100%; height: 32px; margin-top: 4px; }
+
+.upd-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; font-size: 13px; }
+.upd-k { color: var(--nc-text-muted); width: 90px; flex: 0 0 90px; }
+.upd-v { color: var(--nc-text-1); font-weight: 600; flex: 1; }
+.upd-cmd { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--el-fill-color-light); border-radius: 6px; }
+.upd-cmd code { flex: 1; font-size: 12px; color: var(--nc-text-1); word-break: break-all; }
+.upd-err { padding: 8px 0; }
 
 @media (max-width: 720px) {
   .hero { grid-template-columns: 1fr; }

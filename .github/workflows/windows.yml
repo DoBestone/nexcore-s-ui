@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
   release:
     types: [published]
+  # 故意去掉 `push: tags` —— release published 已经会触发,再听 tag push 会
+  # 让相同 commit 跑两遍,第二遍上传同名 asset 时撞 422 "already_exists"。
   push:
     branches:
       - main
-    tags:
-      - "*"
     paths:
       - '.github/workflows/windows.yml'
       - 'frontend/**'
@@ -16,6 +16,10 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'windows/**'
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: "25"
