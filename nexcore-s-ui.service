@@ -10,11 +10,15 @@ ExecStart=/usr/local/nexcore-s-ui/sui
 Restart=on-failure
 RestartSec=10s
 
-# AUDIT.md H6 — systemd 加固。所有 sandbox 选项都在 sui 仍以 root 跑、
-# 仍能 bind 低端口 / 创建 tun 设备的前提下保守选,**不破坏现有功能**:
+# AUDIT.md H6 — systemd 加固。
+#
+# ⚠️ ProtectSystem=full 会把整个 /usr(包括 /usr/local)挂 RO。sui 自己的 DB
+# / cert / acme 都在 /usr/local/nexcore-s-ui/ 下,必须用 ReadWritePaths 显式
+# 豁免,否则 sui 写 DB 报 "attempt to write a readonly database"。
+# 这是 v1.7.13 → v1.7.14 的修复点。
 #
 #   NoNewPrivileges        进程不能 setuid 提权(零副作用)
-#   ProtectSystem=full     /usr /boot /etc 只读;/usr/local 仍可写(cert/db/acme)
+#   ProtectSystem=full     /usr /boot /etc 只读;ReadWritePaths 豁免 sui 工作目录
 #   ProtectHome=true       /home /root /run/user 不可读,sui 不需要这些
 #   PrivateTmp=true        独立 /tmp,免污染共享 tmp
 #   LockPersonality        禁 personality(2) syscall
@@ -27,6 +31,7 @@ RestartSec=10s
 #   User=non-root          要 bind 80/443 + ACME 写 cert,保留 root
 NoNewPrivileges=true
 ProtectSystem=full
+ReadWritePaths=/usr/local/nexcore-s-ui
 ProtectHome=true
 PrivateTmp=true
 LockPersonality=true

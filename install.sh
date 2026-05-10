@@ -391,6 +391,7 @@ Restart=on-failure
 RestartSec=10s
 NoNewPrivileges=true
 ProtectSystem=full
+ReadWritePaths=${INSTALL_DIR}
 ProtectHome=true
 PrivateTmp=true
 LockPersonality=true
