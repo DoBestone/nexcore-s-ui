@@ -10,6 +10,12 @@
 
     // Dev Mode
     if (window.BASE_URL.charAt(0) === '{') window.BASE_URL = "/app/"
+
+    // Go html/template 在 <script> JS context 里会把 BASE_URL 里的 "/" 转义
+    // 成 "\/"(JS 字符串里合法但不是合法 URL 路径),vue-router createWebHistory
+    // 拒识别 → 登录后 router.push('/') 跳到根而不是 BASE_URL,死循环回 login。
+    // 这里把 \/ 还原回 /,跟服务端 webPath 设置匹配。
+    window.BASE_URL = window.BASE_URL.replace(/\\\//g, '/')
   </script>
   <title>S-UI</title>
 </head>
