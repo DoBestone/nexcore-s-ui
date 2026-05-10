@@ -92,7 +92,13 @@ func OpenDB(dbPath string) error {
 	// 要真启 fk 须先把 inbound.tls_id 改 *uint nullable + 数据迁移把现存
 	// 0 改 NULL,改动量大、风险高,这次不做。Service 层已有"tls in use"
 	// 软校验,可控。
-	dsn := dbPath + sep + "_busy_timeout=10000&_journal_mode=WAL"
+	// _txlock=immediate:让 GORM db.Begin() 走 BEGIN IMMEDIATE,事务一开始就拿
+	// RESERVED 写锁,busy_timeout 才能干净地覆盖等待。默认 DEFERRED 在读升写时
+	// 撞另一个写者会直接 SQLITE_BUSY 不重试,典型表现:"第一次保存 database is
+	// locked,立刻再点就 OK"(SaveStats cron 每 10s 写一次撞了 Save tx 升级)。
+	// _busy_timeout=30000:Save 路径包含 corePtr.AddInbound,sing-box 复杂入站
+	// reload 3-8s,叠加 SaveStats 撞窗口需要更充分缓冲,30s 兜底。
+	dsn := dbPath + sep + "_busy_timeout=30000&_journal_mode=WAL&_txlock=immediate"
 	db, err = gorm.Open(sqlite.Open(dsn), c)
 	if err != nil {
 		return err
