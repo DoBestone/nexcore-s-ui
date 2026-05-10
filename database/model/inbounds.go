@@ -19,7 +19,14 @@ type Inbound struct {
 
 	Addrs   json.RawMessage `json:"addrs" form:"addrs"`
 	OutJson json.RawMessage `json:"out_json" form:"out_json"`
-	Options json.RawMessage `json:"-" form:"-"`
+	// LinkAddrSource — 入站级覆盖全局 settings.linkAddrSource。
+	//   ""    跟随全局(默认)
+	//   panel 用 panel webDomain / Host
+	//   ip    用 settings.panelIp
+	//   tls   用 inbound.tls.server_name
+	// 不下发给 sing-box(MarshalJSON 不输出),只走前端 LoadData / LinkGenerator。
+	LinkAddrSource string          `json:"link_addr_source,omitempty" form:"link_addr_source" gorm:"size:16"`
+	Options        json.RawMessage `json:"-" form:"-"`
 
 	// Ext 存自定义元数据(JSON 字符串),跟 sing-box 配置无关。当前用于 Basic
 	// Auth 协议的 per-cred 流量/到期限制:
@@ -86,6 +93,12 @@ func (i *Inbound) UnmarshalJSON(data []byte) error {
 		}
 	}
 	delete(raw, "ext")
+
+	// LinkAddrSource — 前端字段,不下发给 sing-box;从 raw 抽出免得被塞进 Options
+	if v, ok := raw["link_addr_source"].(string); ok {
+		i.LinkAddrSource = v
+	}
+	delete(raw, "link_addr_source")
 
 	// Remaining fields
 	i.Options, err = json.MarshalIndent(raw, "", "  ")

@@ -119,6 +119,21 @@
             底层是在 route.rules 最前插一条 <span class="mono">{ inbound: ["{{ inbound.tag || '...' }}"], outbound: "..." }</span>,改名 / 删除入站自动同步。
           </p>
         </el-form-item>
+
+        <!-- 入站级覆盖全局 linkAddrSource — 不同入站可走不同 server 字段策略 -->
+        <el-form-item label="分享链接 server 字段来源(本入站)" class="form-item--full">
+          <el-radio-group v-model="inbound.link_addr_source">
+            <el-radio value="">跟随全局</el-radio>
+            <el-radio value="panel">面板域名</el-radio>
+            <el-radio value="ip">服务器 IP</el-radio>
+            <el-radio value="tls">TLS server_name</el-radio>
+          </el-radio-group>
+          <p class="form-hint">
+            <b>跟随全局</b>(默认)— 用「设置 → 分享链接 server 字段来源」选的;<br>
+            <b>面板域名 / IP / TLS</b> — 单独覆盖,跟全局取值相同语义。<br>
+            常见用法:个别 vless+ws 入站走 CF(选「面板域名」),个别 anytls 入站绕开 CF 直连源(选「服务器 IP」)。
+          </p>
+        </el-form-item>
       </div>
 
       <!-- 协议专属字段(凭据 / 参数) -->
@@ -781,6 +796,9 @@ const loadData = async (id: number) => {
   if (HasInData.includes(inbound.value.type) && inbound.value.out_json == null) {
     inbound.value.out_json = {}
   }
+  // 老入站(v1.7.22 之前)DB 没 link_addr_source 字段,radio 选不到 "" 选项,
+  // 这里显式补默认值 "" = 跟随全局
+  if (inbound.value.link_addr_source == null) inbound.value.link_addr_source = ''
   // 把现有 route.rules 里指向此入站的 binding 反向同步到 select
   syncDefaultOutboundFromConfig()
   refreshJson()
@@ -804,6 +822,7 @@ const updateData = (id: number) => {
     title.value = 'add'
     loading.value = false
     defaultOutbound.value = 'inherit'
+    inbound.value.link_addr_source = ''
     refreshJson()
   }
 }

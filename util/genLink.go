@@ -18,16 +18,22 @@ type LinkParam struct {
 	Value string
 }
 
-// LinkGenerator 生成客户端分享链接。addrSource 决定 add 字段来源:
-// "panel"(默认 / 空) = 用 hostname(panel webDomain / Host)
-// "tls"               = 用 inbound.tls.server_name,通配符回退 hostname
+// LinkGenerator 生成客户端分享链接。addrSource 决定 add 字段来源(三态):
+//
+//	"panel"(默认 / 空)  用 hostname(panel webDomain / Host)
+//	"ip"                 用 panelIp(管理员手填的源 IP);空时 fallback hostname
+//	"tls"                用 inbound.tls.server_name(通配符 / 空时 fallback hostname)
+//
+// 入站可在 inbound.LinkAddrSource 单独覆盖此全局策略 — 调用方负责把
+// `inbound.LinkAddrSource OR settings.linkAddrSource OR "panel"` 计算好后
+// 传入 addrSource 参数。本函数不知道全局 settings,只看入参。
 //
 // remark 命名规则(vmess.ps / 其它协议 #fragment):
 //   - 主前缀 remarkPrefix 由调用方算出 — 直连模式 = settings.nodeName,
 //     中转模式 = outbound.display_name(回退 outbound.tag)。空则 fallback inbound.Tag。
 //   - clientName 不空时附加 "-<clientName>",方便用户在客户端区分账号。
 //   - 同一 inbound 配多 Addrs 时,附加 addrRemark suffix 区分各 server。
-func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname string, addrSource string, clientName string, remarkPrefix string) []string {
+func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname string, addrSource string, panelIp string, clientName string, remarkPrefix string) []string {
 	linkAddrSource := addrSource
 	inbound, err := i.MarshalFull()
 	if err != nil {
@@ -73,18 +79,23 @@ func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname stri
 		return []string{}
 	}
 	if len(Addrs) == 0 {
-		// server 字段是客户端实际 dial 的目标 — 必须 DNS 解析到本机公网 IP。
-		// 来源由 settings.linkAddrSource 控制:
+		// server 字段是客户端实际 dial 的目标 — 必须 DNS 解析或直连到本机公网。
+		// 来源由 (inbound.LinkAddrSource OR settings.linkAddrSource) 控制:
 		//   "panel"(默认) → hostname(panel webDomain / Host),DNS 必通
-		//   "tls"          → inbound.tls.server_name,通配符 *.x.example
-		//                    回退 hostname。需要管理员自己保证每个 server_name
-		//                    在 DNS 里有 A 记录指向本机公网 IP。
-		// 旧版无脑用 server_name 导致用户证书签好但 add 域名解析到别处,代理
-		// 跑不通。改成可配置,默认 panel 最稳。
+		//   "ip"           → panelIp(管理员手填的源 IP),raw TCP 协议绕开 CDN 时用
+		//   "tls"          → inbound.tls.server_name(通配符 / 空时 fallback hostname)
+		// 缺省 / 兜底一律 fallback hostname,保证 link 总有合法 server 字段。
 		serverField := hostname
-		if linkAddrSource == "tls" && i.TlsId > 0 {
-			if sn, ok := tls["server_name"].(string); ok && sn != "" && !strings.HasPrefix(sn, "*.") {
-				serverField = sn
+		switch linkAddrSource {
+		case "ip":
+			if strings.TrimSpace(panelIp) != "" {
+				serverField = strings.TrimSpace(panelIp)
+			}
+		case "tls":
+			if i.TlsId > 0 {
+				if sn, ok := tls["server_name"].(string); ok && sn != "" && !strings.HasPrefix(sn, "*.") {
+					serverField = sn
+				}
 			}
 		}
 		Addrs = append(Addrs, map[string]interface{}{

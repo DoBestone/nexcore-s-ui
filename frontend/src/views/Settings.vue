@@ -34,16 +34,22 @@
               <el-form-item label="节点名称(侧边栏显示)">
                 <el-input v-model="settings.nodeName" placeholder="如「香港-1 BGP」、「东京 PCCW」(留空不显示)" />
               </el-form-item>
-              <el-form-item label="分享链接域名来源" class="form-item--full">
+              <el-form-item label="分享链接 server 字段来源(全局)" class="form-item--full">
                 <el-radio-group v-model="settings.linkAddrSource">
-                  <el-radio value="panel">面板域名 / IP(推荐)</el-radio>
-                  <el-radio value="tls">入站 TLS 证书域名(server_name)</el-radio>
+                  <el-radio value="panel">面板域名(推荐,可走 CDN)</el-radio>
+                  <el-radio value="ip">服务器 IP</el-radio>
+                  <el-radio value="tls">TLS 证书域名(server_name)</el-radio>
                 </el-radio-group>
                 <p class="form-hint">
-                  vmess / vless 等分享链接里的 <code class="mono">add</code> 字段(客户端 dial 的目标)从哪里来:<br>
-                  <b>面板域名</b> = 用 panel 设置的域名 / 访问 host(DNS 必通);<br>
-                  <b>TLS server_name</b> = 用入站证书签的域名(每入站独立 add,需要管理员自己确保每个 server_name 在 CF 上有 A 记录指向本机)。
+                  vmess / vless 等分享链接里 <code class="mono">add</code> 字段(客户端 dial 的目标)从哪里来:<br>
+                  <b>面板域名</b> — 用 panel 域名(开了 CF 小黄云就走 CDN,大陆抗封首选);<br>
+                  <b>服务器 IP</b> — 用下方 <code class="mono">服务器公网 IP</code> 字段,raw TCP 协议(anytls / shadowsocks / vmess+tcp 等不能透 CDN)的中转出站要用这个;<br>
+                  <b>TLS server_name</b> — 用入站证书签的域名(每入站独立,需要每个 server_name 都有 DNS A 记录)。<br>
+                  入站编辑里可以单独覆盖此全局值。
                 </p>
+              </el-form-item>
+              <el-form-item v-if="settings.linkAddrSource === 'ip'" label="服务器公网 IP" class="form-item--full">
+                <el-input v-model="settings.panelIp" placeholder="如 47.85.19.31(留空 fallback 到面板域名)" />
               </el-form-item>
               <el-form-item :label="$t('setting.addr')">
                 <el-input v-model="settings.webListen" />
@@ -402,6 +408,7 @@ const settings = ref<any>({
   timeLocation: 'Asia/Tehran',
   nodeName: '',
   linkAddrSource: 'panel',
+  panelIp: '',
 })
 
 onMounted(async () => {

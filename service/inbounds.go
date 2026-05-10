@@ -111,6 +111,9 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 				inbData["ext"] = extObj
 			}
 		}
+		// link_addr_source — 入站级覆盖全局 settings.linkAddrSource。空表示
+		// 跟随全局,前端在编辑器里展示时优先读这个字段。
+		inbData["link_addr_source"] = inbound.LinkAddrSource
 		// 入站列表 UI 直接读这三个字段,免去前端跨 onlines/stats/config 三处 join。
 		if t, ok := totals[inbound.Tag]; ok {
 			inbData["total_up"] = t["up"]

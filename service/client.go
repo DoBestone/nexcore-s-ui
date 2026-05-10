@@ -25,6 +25,20 @@ type linkRemarkCtx struct {
 	OutboundDisplay map[string]string // outboundTag → DisplayName(空 fallback tag)
 }
 
+// resolveAddrSource — 入站级 link_addr_source 优先,空则跟随全局,最终
+// 兜底 "panel"。三态值见 SettingService.GetLinkAddrSource 注释。
+func resolveAddrSource(inboundSrc, globalSrc string) string {
+	switch strings.TrimSpace(inboundSrc) {
+	case "panel", "ip", "tls":
+		return inboundSrc
+	}
+	switch globalSrc {
+	case "panel", "ip", "tls":
+		return globalSrc
+	}
+	return "panel"
+}
+
 // remarkPrefixFor 决定 inbound 的 remark 前缀:
 //
 //	中转(InboundRelay 命中且非 'direct')→ outboundDisplay[ot] 优先,空则 outboundTag
@@ -289,7 +303,8 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 	// 链接 add 字段来源策略 — settings.linkAddrSource("panel" / "tls"),
 	// genLink 内部按此决定 add 字段(单独 SettingService 实例,免每个 inbound
 	// 重复 SQL 查询)。
-	addrSource := (&SettingService{}).GetLinkAddrSource()
+	globalSrc := (&SettingService{}).GetLinkAddrSource()
+	panelIp := (&SettingService{}).GetPanelIp()
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for index, client := range clients {
 		var clientLinks []map[string]string
@@ -304,7 +319,7 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 
 		newClientLinks := []map[string]string{}
 		for _, inbound := range inbounds {
-			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
+			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, resolveAddrSource(inbound.LinkAddrSource, globalSrc), panelIp, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
 			for _, newLink := range newLinks {
 				newClientLinks = append(newClientLinks, map[string]string{
 					"remark": inbound.Tag,
@@ -341,7 +356,8 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 	if err != nil {
 		return err
 	}
-	addrSource := (&SettingService{}).GetLinkAddrSource()
+	globalSrc := (&SettingService{}).GetLinkAddrSource()
+	panelIp := (&SettingService{}).GetPanelIp()
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for _, client := range clients {
 		// Add inbounds
@@ -361,7 +377,7 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 		if err := json.Unmarshal(client.Links, &clientLinks); err != nil {
 			logger.Warning("UpdateClientsOnInboundAdd: parse client.Links for id=", client.Id, ": ", err)
 		}
-		newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
+		newLinks := util.LinkGenerator(client.Config, &inbound, hostname, resolveAddrSource(inbound.LinkAddrSource, globalSrc), panelIp, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
 		for _, newLink := range newLinks {
 			newClientLinks = append(newClientLinks, map[string]string{
 				"remark": inbound.Tag,
@@ -467,7 +483,8 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 
 func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]model.Inbound, hostname string, oldTag string) error {
 	var err error
-	addrSource := (&SettingService{}).GetLinkAddrSource()
+	globalSrc := (&SettingService{}).GetLinkAddrSource()
+	panelIp := (&SettingService{}).GetPanelIp()
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for _, inbound := range *inbounds {
 		var clientIds []uint
@@ -488,7 +505,7 @@ func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]mode
 			if err := json.Unmarshal(client.Links, &clientLinks); err != nil {
 				logger.Warning("UpdateLinksByInboundChange: parse client.Links for id=", client.Id, ": ", err)
 			}
-			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
+			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, resolveAddrSource(inbound.LinkAddrSource, globalSrc), panelIp, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
 			for _, newLink := range newLinks {
 				newClientLinks = append(newClientLinks, map[string]string{
 					"remark": inbound.Tag,

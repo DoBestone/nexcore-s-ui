@@ -60,13 +60,16 @@ var defaultValueMap = map[string]string{
 	// 节点名称:多机管理时给每台机一个 nickname,显示在前端侧边栏 logo
 	// 下方,方便区分。空值时不显示。
 	"nodeName": "",
-	// 客户端分享链接 add 字段的来源:
-	//   panel  (默认) — 用 panel webDomain / Host header(管理员能保证 DNS 通)
-	//   tls    — 用 inbound TLS server_name(签证书的域名,但 DNS 不一定通)
-	// 用户报"add 用 server_name 域名导致连不上"的根因是 server_name 没 DNS 记录,
-	// 默认 panel 模式让所有 inbound 共用面板域名,DNS 必通。要每入站独立分享域名
-	// 改 tls,自行确保每个 server_name 有对应 A 记录。
+	// 客户端分享链接 server 字段(add)的来源 — v1.7.23 三态:
+	//   panel  (默认) — 用 panel webDomain / Host header(管理员能保证 DNS 通,且能套 CDN)
+	//   ip            — 用 settings.panelIp(管理员手填的服务器公网 IP),raw TCP 协议绕开 CDN 时用
+	//   tls           — 用 inbound.tls.server_name(签证书的域名;通配符 fallback hostname)
+	// 入站可用 inbound.link_addr_source 单独覆盖此全局值(空则跟随全局)。
 	"linkAddrSource": "panel",
+	// panelIp:管理员手填的服务器公网 IP。给 linkAddrSource=ip 模式用 — 当
+	// 出站 / 客户端 link 必须直连源 IP(绕 CDN)时,server 字段填这个。
+	// 空时 fallback 到 hostname。
+	"panelIp": "",
 }
 
 type SettingService struct {
@@ -215,15 +218,26 @@ func (s *SettingService) GetListen() (string, error) {
 	return s.getString("webListen")
 }
 
-// GetLinkAddrSource 返回客户端分享链接 add 字段的来源策略:
-// "panel"(默认)= 用 webDomain / Host;"tls" = 用 inbound TLS server_name。
-// 取错或空一律 fallback "panel"(最稳)。
+// GetLinkAddrSource 返回客户端分享链接 server 字段的来源策略,三态:
+// "panel"(默认) — 用 webDomain / Host
+// "ip"           — 用 settings.panelIp(管理员手填的源服务器 IP)
+// "tls"          — 用 inbound TLS server_name
+// 入站可在 inbound.LinkAddrSource 单独覆盖此值。取错或空 fallback "panel"。
 func (s *SettingService) GetLinkAddrSource() string {
 	v, _ := s.getString("linkAddrSource")
-	if v == "tls" {
-		return "tls"
+	switch v {
+	case "ip", "tls":
+		return v
 	}
 	return "panel"
+}
+
+// GetPanelIp 返回管理员手填的服务器公网 IP(linkAddrSource=ip 模式专用)。
+// 空则 LinkGenerator 会 fallback 到 hostname。不主动探测公网 IP — 多数云
+// VM 内网网卡返内网 IP,自动探测会拿错值;由管理员显式填入最准。
+func (s *SettingService) GetPanelIp() string {
+	v, _ := s.getString("panelIp")
+	return strings.TrimSpace(v)
 }
 
 // GetNodeName 返回管理员在「设置」里配的节点名称(空则空字符串)。
