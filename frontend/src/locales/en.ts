@@ -45,6 +45,7 @@ export default {
     endpoints: "Endpoints",
     clients: "Clients",
     rules: "Rules",
+    blockRules: "Block Rules",
     tls: "TLS Settings",
     basics: "Basics",
     dns: "DNS",

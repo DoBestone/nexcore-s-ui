@@ -209,6 +209,12 @@ func (a *ApiService) LoadPartialData(c *gin.Context, objs []string) error {
 				return err
 			}
 			data[obj] = settings
+		case "block-rules":
+			blockRules, err := a.ConfigService.BlockRuleService.GetAll()
+			if err != nil {
+				return err
+			}
+			data[obj] = blockRules
 		}
 	}
 

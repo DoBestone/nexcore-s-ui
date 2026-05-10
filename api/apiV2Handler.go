@@ -143,7 +143,7 @@ func (a *APIv2Handler) getHandler(c *gin.Context) {
 	switch action {
 	case "load":
 		a.ApiService.LoadData(c)
-	case "inbounds", "outbounds", "endpoints", "tls", "clients", "config":
+	case "inbounds", "outbounds", "endpoints", "tls", "clients", "config", "block-rules":
 		err := a.ApiService.LoadPartialData(c, []string{action})
 		if err != nil {
 			jsonMsg(c, action, err)

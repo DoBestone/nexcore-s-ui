@@ -45,6 +45,7 @@ export default {
     endpoints: "节点管理",
     clients: "用户管理",
     rules: "路由列表",
+    blockRules: "屏蔽规则",
     tls: "TLS 设置",
     basics: "基础信息",
     dns: "DNS",

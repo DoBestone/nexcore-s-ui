@@ -129,10 +129,14 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	authed.PATCH("/clients/:identifier/limits", a.patchClientLimits)
 	authed.POST("/clients/disable-expired", a.disableExpiredClients)
 
-	// block-rules:s-ui 走 sing-box route.rules action:reject,这里返 stub
-	// 让主控不会因为 404 崩,要真做屏蔽规则去 /sui/route 或面板 UI
-	authed.GET("/block-rules", a.blockRulesStub)
-	authed.GET("/block-rules/presets", a.blockRulesStub)
+	// block-rules:独立的快捷屏蔽规则模块,数据存 model.BlockRule 表,
+	// 生成 sing-box config 时由 ConfigService 自动注入到 route.rules 最前面
+	// (action=reject)。跟"路由列表"模块独立,UI 不互通。详见 block_rules.go。
+	authed.GET("/block-rules", a.listBlockRules)
+	authed.POST("/block-rules", a.createBlockRule)
+	authed.PUT("/block-rules/:id", a.updateBlockRule)
+	authed.DELETE("/block-rules/:id", a.deleteBlockRule)
+	authed.GET("/block-rules/presets", a.listBlockRulePresets)
 
 	// xray/template = s-ui 的 sing-box config(主控可直接 GET / PUT)
 	authed.GET("/xray/template", a.xrayTemplate)
@@ -1306,10 +1310,6 @@ func (a *Controller) listCerts(c *gin.Context) {
 		})
 	}
 	OK(c, out)
-}
-
-func (a *Controller) blockRulesStub(c *gin.Context) {
-	OK(c, []any{})
 }
 
 // xrayTemplate / xrayTemplatePut — 把 x-ui 的 template GET/PUT 映射到 s-ui 的

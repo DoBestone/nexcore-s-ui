@@ -40,6 +40,11 @@ const routes = [
         component: () => import('@/views/Rules.vue'),
       },
       {
+        path: '/block-rules',
+        name: 'pages.blockRules',
+        component: () => import('@/views/BlockRules.vue'),
+      },
+      {
         path: '/tls',
         name: 'pages.tls',
         component: () => import('@/views/Tls.vue'),

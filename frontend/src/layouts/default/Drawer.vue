@@ -64,6 +64,7 @@ import {
   Promotion,
   Cpu,
   Close,
+  CircleClose,
   SwitchButton,
 } from '@element-plus/icons-vue'
 import { markRaw } from 'vue'
@@ -86,6 +87,7 @@ const menu = [
   { title: 'pages.endpoints', icon: markRaw(PriceTag),    path: '/endpoints' },
   { title: 'pages.tls',       icon: markRaw(Lock),        path: '/tls' },
   { title: 'pages.rules',     icon: markRaw(Connection),  path: '/rules' },
+  { title: 'pages.blockRules',icon: markRaw(CircleClose), path: '/block-rules' },
   { title: 'pages.dns',       icon: markRaw(Promotion),   path: '/dns' },
   { title: 'pages.api',       icon: markRaw(Cpu),         path: '/api' },
   { title: 'pages.settings',  icon: markRaw(Setting),     path: '/settings' },

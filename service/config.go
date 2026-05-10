@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type ConfigService struct {
 	InboundService
 	OutboundService
 	EndpointService
+	BlockRuleService
 }
 
 // ensureBuiltinOutbounds 保证最终 config 至少包含 tag=direct 出站。
@@ -95,6 +97,10 @@ func (s *ConfigService) GetConfig(data string) (*[]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 把 BlockRule 表里 enable=true 的行翻译成 reject route.rule,prepend 到
+	// route.rules 最前面 — 优先级高于用户在「路由列表」里手编的规则,
+	// 命中即 reject。详见 database/model/block_rule.go 的模块边界说明。
+	singboxConfig.Route = injectBlockRules(singboxConfig.Route)
 	rawConfig, err := json.MarshalIndent(singboxConfig, "", "  ")
 	if err != nil {
 		return nil, err
@@ -242,6 +248,13 @@ func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initU
 		err = s.OutboundService.Save(tx, act, data)
 	case "endpoints":
 		err = s.EndpointService.Save(tx, act, data)
+	case "block-rules":
+		// 屏蔽规则改完需要 reload sing-box 让 route.rules 注入立即生效。
+		// 跟 case "config" 同样异步 restart,Save 不阻塞返回。
+		err = s.BlockRuleService.Save(tx, act, data)
+		if err == nil {
+			go func() { _ = s.RestartCore() }()
+		}
 	case "config":
 		err = s.SettingService.SaveConfig(tx, data)
 		if err != nil {
@@ -319,4 +332,113 @@ func (s *ConfigService) GetChanges(actor string, chngKey string, count string) [
 		logger.Warning(err)
 	}
 	return chngs
+}
+
+// injectBlockRules 把 model.BlockRule 表里 enable=true 的行翻译成 sing-box
+// route.rule(action=reject),prepend 到 route.rules 数组最前面。
+//
+// 失败兜底:任何一步出错都返回原 routeRaw 不动,只 Warning。reload sing-box
+// 时即使 BlockRule 注入失败,基础 route.rules 仍能让 core 正常起来。
+func injectBlockRules(routeRaw json.RawMessage) json.RawMessage {
+	var blockRules []model.BlockRule
+	if err := database.GetDB().Where("enable = ?", true).Order("id ASC").Find(&blockRules).Error; err != nil {
+		logger.Warning("[block-rules] load failed:", err)
+		return routeRaw
+	}
+	if len(blockRules) == 0 {
+		return routeRaw
+	}
+	if len(routeRaw) == 0 || string(routeRaw) == "null" {
+		routeRaw = json.RawMessage(`{"rules":[]}`)
+	}
+	var routeMap map[string]any
+	if err := json.Unmarshal(routeRaw, &routeMap); err != nil {
+		logger.Warning("[block-rules] parse route failed:", err)
+		return routeRaw
+	}
+	managed := make([]any, 0, len(blockRules))
+	for _, br := range blockRules {
+		if rule := blockRuleToRouteRule(br); rule != nil {
+			managed = append(managed, rule)
+		}
+	}
+	if len(managed) == 0 {
+		return routeRaw
+	}
+	var existing []any
+	if r, ok := routeMap["rules"].([]any); ok {
+		existing = r
+	}
+	routeMap["rules"] = append(managed, existing...)
+	out, err := json.Marshal(routeMap)
+	if err != nil {
+		logger.Warning("[block-rules] marshal route failed:", err)
+		return routeRaw
+	}
+	return out
+}
+
+// blockRuleToRouteRule 把单条 BlockRule 翻成 sing-box route.rule(map 形式)。
+// type 不在白名单 / value 解析失败 → 返回 nil 跳过该条(不让一条坏规则导致
+// reload 整体失败)。
+//
+// 翻译表:
+//   domain    → domain_suffix(覆盖更广,匹配 x-ui 的"包含子域"行为)
+//   ip        → ip_cidr
+//   geosite   → geosite
+//   geoip     → geoip
+//   port      → port (数字数组)
+//   protocol  → protocol(tls/http/quic ... sing-box sniff 后的 protocol 名)
+//   source    → source_ip_cidr
+func blockRuleToRouteRule(br model.BlockRule) map[string]any {
+	values := splitTrim(br.Value, ",")
+	if len(values) == 0 {
+		return nil
+	}
+	rule := map[string]any{"action": "reject"}
+	switch br.Type {
+	case "domain":
+		rule["domain_suffix"] = values
+	case "ip":
+		rule["ip_cidr"] = values
+	case "geosite":
+		rule["geosite"] = values
+	case "geoip":
+		rule["geoip"] = values
+	case "port":
+		ports := make([]int, 0, len(values))
+		for _, v := range values {
+			if n, err := strconv.Atoi(v); err == nil {
+				ports = append(ports, n)
+			}
+		}
+		if len(ports) == 0 {
+			return nil
+		}
+		rule["port"] = ports
+	case "protocol":
+		rule["protocol"] = values
+	case "source":
+		rule["source_ip_cidr"] = values
+	default:
+		return nil
+	}
+	if br.InboundTag != "" {
+		rule["inbound"] = []string{br.InboundTag}
+	}
+	return rule
+}
+
+func splitTrim(s, sep string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
