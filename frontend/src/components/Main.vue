@@ -168,7 +168,10 @@ const uptimeText = computed(() => sbdRunning.value
   : '点击「重启内核」以启动')
 
 // CPU/内存
-const cpuPct = computed(() => Number(tilesData.value?.cpu?.[0] ?? 0))
+// 后端 GetCpuPercent() 返回单个 float64(整机聚合 CPU%);早期写成 cpu[0] 是
+// 误把 gopsutil 的 percpu=false 切片误当成多核数组,实际只有一个元素已在后端
+// 拆出来直接返。
+const cpuPct = computed(() => Number(tilesData.value?.cpu ?? 0))
 const cpuCores = computed(() => tilesData.value?.sys?.cpuCount ?? 0)
 const memUsed = computed(() => Number(tilesData.value?.mem?.current ?? 0))
 const memTotal = computed(() => Number(tilesData.value?.mem?.total ?? 1))

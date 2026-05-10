@@ -117,6 +117,10 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	authed.GET("/certs", a.listCerts) // x-ui 兼容别名:s-ui 把证书放 model.Tls 表
 	authed.GET("/clients", a.listClients)
 	authed.GET("/clients/:identifier", a.getClient)
+	// 全局 client 写入(不限定 inbound):body 自带 inbounds 数组
+	authed.POST("/clients", a.createClient)
+	authed.PUT("/clients/:identifier", a.updateClient)
+	authed.DELETE("/clients/:identifier", a.deleteClient)
 
 	// 客户端流量 / 启停 / 配额(x-ui 主控关心的字段:up/down/total/expiryTime)
 	authed.GET("/clients/:identifier/traffic", a.clientTraffic)

@@ -266,3 +266,129 @@ func (a *Controller) deleteClientByInbound(c *gin.Context) {
 	}
 	OK(c, gin.H{"object": "clients", "action": "edit", "affected": objs})
 }
+
+// =============================================================
+//  全局 client 写入(不绑定特定 inbound)
+// =============================================================
+//
+// POST   /clients               body 是完整 client 对象,inbounds 数组由 body 决定
+// PUT    /clients/:identifier   merge 进现存 client(:identifier 锁定对象)
+// DELETE /clients/:identifier   整条删
+//
+// 与 per-inbound 那套的区别:这里完全不动 inbounds 字段,由调用方决定 client
+// 跨哪些入站。底层 ConfigService.Save("clients", ...) 仍会按 inbounds 数组
+// reload 涉及的 sing-box 入站。
+
+// POST /clients
+// body 必填:name + inbounds + config(否则 sing-box 重启时拿不到协议账号)
+func (a *Controller) createClient(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	if _, ok := raw["name"]; !ok {
+		BadRequest(c, "client_name_required", "name required")
+		return
+	}
+	if _, ok := raw["inbounds"]; !ok {
+		BadRequest(c, "client_inbounds_required", "inbounds required (e.g. [2])")
+		return
+	}
+	if _, ok := raw["config"]; !ok {
+		BadRequest(c, "client_config_required", "config required (协议账号信息,e.g. {\"vmess\":{\"name\":\"...\",\"uuid\":\"...\"}})")
+		return
+	}
+	username := c.GetString("api_token_user")
+	if username == "" {
+		username = "api"
+	}
+	objs, err := a.configSvc.Save("clients", "new", json.RawMessage(body), "", username, getPanelHost(c))
+	if err != nil {
+		BadRequest(c, mapSaveErr(err, "save_failed"), err.Error())
+		return
+	}
+	Created(c, gin.H{"object": "clients", "action": "new", "affected": objs})
+}
+
+// PUT /clients/:identifier
+// merge 语义:body 的字段覆盖现存 client,未给的字段保持原值。
+// :identifier 锁定要改的对象(name 或 numeric id)。
+// 我们强制把 id 设回现存值,避免 patch 漏掉 / 改成 0 让 ClientService.Save
+// 走"主键 0 → INSERT"分支多出一条客户端。
+func (a *Controller) updateClient(c *gin.Context) {
+	identifier := c.Param("identifier")
+	cli, err := findClientByIdentifier(identifier)
+	if err != nil {
+		NotFound(c, "client_not_found", err.Error())
+		return
+	}
+	body, err := c.GetRawData()
+	if err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	var patch map[string]json.RawMessage
+	if err := json.Unmarshal(body, &patch); err != nil {
+		BadRequest(c, "invalid_body", err.Error())
+		return
+	}
+	baseBytes, err := json.Marshal(cli)
+	if err != nil {
+		Internal(c, "marshal_failed", err)
+		return
+	}
+	var base map[string]json.RawMessage
+	if err := json.Unmarshal(baseBytes, &base); err != nil {
+		Internal(c, "unmarshal_failed", err)
+		return
+	}
+	for k, v := range patch {
+		base[k] = v
+	}
+	idJson, _ := json.Marshal(cli.Id)
+	base["id"] = idJson
+
+	patched, err := json.Marshal(base)
+	if err != nil {
+		Internal(c, "marshal_failed", err)
+		return
+	}
+	username := c.GetString("api_token_user")
+	if username == "" {
+		username = "api"
+	}
+	objs, err := a.configSvc.Save("clients", "edit", json.RawMessage(patched), "", username, getPanelHost(c))
+	if err != nil {
+		BadRequest(c, mapSaveErr(err, "save_failed"), err.Error())
+		return
+	}
+	OK(c, gin.H{"object": "clients", "action": "edit", "affected": objs, "id": cli.Id, "name": cli.Name})
+}
+
+// DELETE /clients/:identifier
+// 整条物理删,不管挂在几个入站(per-inbound 解绑要走 DELETE /inbounds/:id/clients/:identifier)。
+func (a *Controller) deleteClient(c *gin.Context) {
+	identifier := c.Param("identifier")
+	cli, err := findClientByIdentifier(identifier)
+	if err != nil {
+		NotFound(c, "client_not_found", err.Error())
+		return
+	}
+	username := c.GetString("api_token_user")
+	if username == "" {
+		username = "api"
+	}
+	idJson, _ := json.Marshal(cli.Id)
+	objs, err := a.configSvc.Save("clients", "del", json.RawMessage(idJson), "", username, getPanelHost(c))
+	if err != nil {
+		BadRequest(c, mapSaveErr(err, "delete_failed"), err.Error())
+		return
+	}
+	OK(c, gin.H{"object": "clients", "action": "del", "affected": objs, "id": cli.Id, "name": cli.Name})
+}
