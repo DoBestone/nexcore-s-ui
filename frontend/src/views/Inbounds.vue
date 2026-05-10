@@ -172,7 +172,7 @@
           <template #default="{ row }">
             <span v-if="trafficOf(row.tag)" class="mono traffic-cell">
               {{ HumanReadable.sizeFormat(trafficOf(row.tag)) }}
-              <span class="traffic-detail">↑ {{ HumanReadable.sizeFormat(traffic[row.tag]?.up ?? 0) }} / ↓ {{ HumanReadable.sizeFormat(traffic[row.tag]?.down ?? 0) }}</span>
+              <span class="traffic-detail">↑ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.up ?? 0) }} / ↓ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.down ?? 0) }}</span>
             </span>
             <span v-else class="muted">—</span>
           </template>
@@ -292,7 +292,7 @@
           <template #default="{ row }">
             <span v-if="trafficOf(row.tag)" class="mono traffic-cell">
               {{ HumanReadable.sizeFormat(trafficOf(row.tag)) }}
-              <span class="traffic-detail">↑ {{ HumanReadable.sizeFormat(traffic[row.tag]?.up ?? 0) }} / ↓ {{ HumanReadable.sizeFormat(traffic[row.tag]?.down ?? 0) }}</span>
+              <span class="traffic-detail">↑ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.up ?? 0) }} / ↓ {{ HumanReadable.sizeFormat(trafficByTag[row.tag]?.down ?? 0) }}</span>
             </span>
             <span v-else class="muted">—</span>
           </template>
@@ -643,8 +643,34 @@ const toggleEnable = async (row: any, v: boolean) => {
 
 // ---------- 总流量 ----------
 const traffic = ref<Record<string, { up: number; down: number }>>({})
+// 入站流量 = 本入站所有绑定 client 的 up+down 之和 — 单 client 时跟 client
+// 流量数字完全一致(用户期待);多 client 时是各 client 累加。
+// 不用 stats 表 SUM(那是 sing-box 内部分桶,会包含已删 client / sentinel
+// 阶段的样本,跟 client 总和对不齐,引发"为什么差几十 MB"的疑惑)。
+const trafficByTag = computed<Record<string, { up: number; down: number }>>(() => {
+  const idToTag: Record<number, string> = {}
+  for (const ib of (Data().inbounds || [])) {
+    if (ib?.id != null && ib?.tag) idToTag[ib.id] = ib.tag
+  }
+  const out: Record<string, { up: number; down: number }> = {}
+  for (const c of (Data().clients || [])) {
+    const ids: number[] = Array.isArray(c?.inbounds) ? c.inbounds
+      : (typeof c?.inbounds === 'string' ? JSON.parse(c.inbounds || '[]') : [])
+    const up = Number(c?.up || 0) + Number(c?.totalUp || 0)
+    const down = Number(c?.down || 0) + Number(c?.totalDown || 0)
+    for (const id of ids) {
+      const tag = idToTag[id]
+      if (!tag) continue
+      const cur = out[tag] || { up: 0, down: 0 }
+      cur.up += up
+      cur.down += down
+      out[tag] = cur
+    }
+  }
+  return out
+})
 const trafficOf = (tag: string) => {
-  const t = traffic.value[tag]
+  const t = trafficByTag.value[tag]
   if (!t) return 0
   return (t.up || 0) + (t.down || 0)
 }
