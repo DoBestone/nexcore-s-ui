@@ -45,6 +45,22 @@ func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname stri
 	var tls map[string]interface{}
 	if i.TlsId > 0 {
 		tls = prepareTls(i.Tls)
+		// 通配符 TLS UX 修复:用户报"导入软件黄色警告"的根因是 server_name
+		// 字段空或本身是通配符 *.x → vmess.sni / vless?sni= 都会传通配符给客户端,
+		// 客户端 TLS 校验证书 SAN 时要求精确 host(*.x.example 不是合法 SNI),
+		// 报"hostname mismatch"。
+		// 这里从 acme.domain 取通配符,用 inbound.tag 替换 *,生成合法子域名。
+		// 例:acme.domain=["*.lp.nicevpn.org"] + tag="vless-15414" → "vless-15414.lp.nicevpn.org"。
+		// 链接 server 字段(实际 dial host)不动,客户端按 IP / panel host 直连;
+		// TLS 握手时 sni 用替换后的子域名,通配符证书匹配 ✅。
+		// 用户无需改 DNS(链接 server 不依赖子域名解析)。
+		if tls != nil {
+			if sn, _ := tls["server_name"].(string); sn == "" || strings.HasPrefix(sn, "*.") {
+				if dyn := wildcardSniFromAcme(i.Tls.Server, i.Tag); dyn != "" {
+					tls["server_name"] = dyn
+				}
+			}
+		}
 	}
 
 	var userConfig map[string]map[string]interface{}
@@ -131,6 +147,61 @@ func LinkGenerator(clientConfig json.RawMessage, i *model.Inbound, hostname stri
 	}
 
 	return []string{}
+}
+
+// wildcardSniFromAcme 从 TLS 的 server.acme.domain 找通配符域名,把 *
+// 替换为 inbound.tag(经 DNS label 安全清洗)生成合法 SNI 子域名。
+//
+//	acme.domain = ["*.lp.nicevpn.org"] + tag = "vless-15414"
+//	→ 返回 "vless-15414.lp.nicevpn.org"
+//
+// 多个域名时取第一个含 * 的;没找到通配符或解析失败返回 ""。
+// 调用方:LinkGenerator 仅在 server_name 缺失/通配符时调用,正常 SNI 路径不动。
+func wildcardSniFromAcme(serverRaw json.RawMessage, inboundTag string) string {
+	if len(serverRaw) == 0 {
+		return ""
+	}
+	var srv map[string]interface{}
+	if err := json.Unmarshal(serverRaw, &srv); err != nil {
+		return ""
+	}
+	acme, ok := srv["acme"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	domains, _ := acme["domain"].([]interface{})
+	for _, d := range domains {
+		s, ok := d.(string)
+		if !ok || !strings.HasPrefix(s, "*.") {
+			continue
+		}
+		sub := sanitizeDNSLabel(inboundTag)
+		if sub == "" {
+			sub = "node"
+		}
+		return sub + s[1:] // *.lp.nicevpn.org → <sub>.lp.nicevpn.org
+	}
+	return ""
+}
+
+// sanitizeDNSLabel 把任意字符串转为合法 DNS label:仅保留 a-z/0-9/-,
+// 首尾的 - 修剪,长度截断 ≤ 63(RFC 1035)。inbound.tag 本身基本就是
+// 这种格式,这里只是防御性处理(用户可能自定义 tag 含中文/特殊字符)。
+func sanitizeDNSLabel(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-', r == '_':
+			b.WriteByte('-')
+		}
+	}
+	res := strings.Trim(b.String(), "-")
+	if len(res) > 63 {
+		res = res[:63]
+	}
+	return res
 }
 
 func prepareTls(t *model.Tls) map[string]interface{} {

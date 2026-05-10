@@ -121,6 +121,11 @@
                 placeholder="api.example.com,*.example.com"
                 @input="(v: string) => config.server.acme.domain = v ? v.split(',').map((x: string) => x.trim()) : []"
               />
+              <p v-if="hasWildcardDomain" class="form-hint hint-info">
+                ⓘ 检测到通配符域名。生成的分享链接 <code>sni</code> 字段会自动用入站 tag 替换 <code>*</code>(如
+                <code>vless-15414.example.com</code>),客户端 TLS 校验会通过通配符证书匹配,导入不报黄色警告。
+                链接 <code>server</code>(实际 dial 目标)仍是面板域名/IP,无需对每个子域名单独配 DNS。
+              </p>
             </el-form-item>
             <el-form-item label="联系邮箱">
               <el-input v-model="config.server.acme.email" placeholder="admin@example.com" />
@@ -290,6 +295,11 @@ const hasAcme = computed({
     if (v) tab.value = 'acme'
   },
 })
+// 通配符提示:绑定此 TLS 的入站生成的分享链接,sni 字段会被后端
+// (util/genLink.go::wildcardSniFromAcme)用 inbound.tag 替换 *。
+const hasWildcardDomain = computed((): boolean =>
+  ((config.value.server?.acme?.domain as string[] | undefined) || []).some((d: string) => d.startsWith('*.')),
+)
 const hasReality = computed({
   get: () => !!config.value.server?.reality,
   set: (v: boolean) => {
@@ -419,6 +429,13 @@ watch(() => props.visible, (v) => { if (v) updateData(props.id) })
   color: var(--nc-text-muted);
   margin: 4px 0;
   line-height: 1.5;
+}
+.form-hint.hint-info {
+  color: var(--nc-text-1);
+  background: var(--nc-primary-soft);
+  border-left: 3px solid var(--nc-primary);
+  padding: 8px 10px;
+  border-radius: 4px;
 }
 .form-hint code {
   font-family: var(--font-mono);
