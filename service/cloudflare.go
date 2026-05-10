@@ -290,7 +290,8 @@ func (s *CloudflareService) IssueTLS(name, fqdn, email, cfToken, dataDir string)
 	}
 
 	// ACME 端配置,机场场景默认值:
-	//   - key_type=ec256:ECDSA P-256,握手包减半,代理路径延迟敏感
+	//   - 私钥类型走 sing-box / certmagic 默认 P256(ECDSA),跟旧版 key_type=ec256
+	//     等价;sing-box 1.13.5+ 移除了 key_type 字段,显式传会 unknown field
 	//   - disable_http_challenge / disable_tls_alpn_challenge:已有 DNS-01,
 	//     堵住兜底端口挑战,避免占 80/443 跟入站冲突
 	acme := map[string]interface{}{
@@ -299,7 +300,6 @@ func (s *CloudflareService) IssueTLS(name, fqdn, email, cfToken, dataDir string)
 		"default_server_name":        apex, // 通配符模式落到 apex,DNS-01 实际用不到
 		"email":                      email,
 		"provider":                   "letsencrypt",
-		"key_type":                   "ec256",
 		"disable_http_challenge":     true,
 		"disable_tls_alpn_challenge": true,
 		"dns01_challenge": map[string]interface{}{

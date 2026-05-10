@@ -255,6 +255,12 @@ func (s *InboundService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	for _, inbound := range inbounds {
+		// 兼容老 DB:sing-box 1.13.5+ 删了 acme.key_type,reload 时见到这个字段
+		// 会让 sing-box 起不来。这里在 marshal 前 strip 一次,跟 TlsService.Save 同套
+		// helper(写库 + 加载两道防线 → 升级用户即使没改过 TLS 也能直接 reload)。
+		if inbound.Tls != nil && len(inbound.Tls.Server) > 0 {
+			inbound.Tls.Server = stripACMEKeyType(inbound.Tls.Server)
+		}
 		inboundJson, err := inbound.MarshalJSON()
 		if err != nil {
 			return nil, err

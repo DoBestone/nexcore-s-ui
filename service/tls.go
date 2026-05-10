@@ -14,6 +14,35 @@ type TlsService struct {
 	InboundService
 }
 
+// stripACMEKeyType 删掉 server.acme.key_type 字段。sing-box 1.13.5+ 的
+// option.InboundACMEOptions 不再有 KeyType,reload 时见到该字段会因
+// strict-unmarshal 报 "unknown field key_type" 让面板保存失败。
+// 旧版默认 ec256(P256/ECDSA),sing-box 现在走 certmagic 默认值(也是 P256),
+// 行为等价,删掉无副作用。
+func stripACMEKeyType(serverRaw json.RawMessage) json.RawMessage {
+	if len(serverRaw) == 0 {
+		return serverRaw
+	}
+	var srv map[string]interface{}
+	if err := json.Unmarshal(serverRaw, &srv); err != nil {
+		return serverRaw
+	}
+	acme, ok := srv["acme"].(map[string]interface{})
+	if !ok {
+		return serverRaw
+	}
+	if _, has := acme["key_type"]; !has {
+		return serverRaw
+	}
+	delete(acme, "key_type")
+	srv["acme"] = acme
+	out, err := json.Marshal(srv)
+	if err != nil {
+		return serverRaw
+	}
+	return out
+}
+
 func (s *TlsService) GetAll() ([]model.Tls, error) {
 	db := database.GetDB()
 	tlsConfig := []model.Tls{}
@@ -35,6 +64,10 @@ func (s *TlsService) Save(tx *gorm.DB, action string, data json.RawMessage, host
 		if err != nil {
 			return err
 		}
+		// sing-box 1.13.5+ 删除了 acme.key_type — 写库前 strip 掉,
+		// 否则 reload sing-box 会报 unknown field "key_type"。
+		// 老配置(v1.7.4 时代签发的)/ 用户粘贴的 schema 都可能带这个字段。
+		tls.Server = stripACMEKeyType(tls.Server)
 		err = tx.Save(&tls).Error
 		if err != nil {
 			return err
