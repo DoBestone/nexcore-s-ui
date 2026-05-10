@@ -114,6 +114,9 @@ func (s *InboundService) FromIds(ids []uint) ([]*model.Inbound, error) {
 func (s *InboundService) Save(tx *gorm.DB, act string, data json.RawMessage, initUserIds string, hostname string) error {
 	var err error
 
+	// 兼容老格式 / xray-style JSON 粘贴:port 类字段 string→number、删 acme.key_type 等
+	data = SanitizeRawConfig(data)
+
 	switch act {
 	case "new", "edit":
 		var inbound model.Inbound
@@ -255,12 +258,14 @@ func (s *InboundService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	for _, inbound := range inbounds {
-		// 兼容老 DB:sing-box 1.13.5+ 删了 acme.key_type,reload 时见到这个字段
-		// 会让 sing-box 起不来。这里在 marshal 前 strip 一次,跟 TlsService.Save 同套
-		// helper(写库 + 加载两道防线 → 升级用户即使没改过 TLS 也能直接 reload)。
+		// 兼容老 DB:sing-box 1.13.5+ 多个字段被删/类型收紧 (acme.key_type 等),
+		// reload 时见到这些字段会让 sing-box 起不来。Save 时已 sanitize,
+		// 但 v1.7.4 时代写入的老数据可能从没经过 sanitize — 加载时再跑一次兜底,
+		// 升级用户即使从未编辑过现有配置也能直接 reload 成功。
 		if inbound.Tls != nil && len(inbound.Tls.Server) > 0 {
-			inbound.Tls.Server = stripACMEKeyType(inbound.Tls.Server)
+			inbound.Tls.Server = SanitizeRawConfig(inbound.Tls.Server)
 		}
+		inbound.Options = SanitizeRawConfig(inbound.Options)
 		inboundJson, err := inbound.MarshalJSON()
 		if err != nil {
 			return nil, err

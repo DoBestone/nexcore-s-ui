@@ -52,6 +52,8 @@ func (o *EndpointService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	for _, endpoint := range endpoints {
+		// 加载兜底 — 见 service/inbounds.go GetAllConfig 同款注释
+		endpoint.Options = SanitizeRawConfig(endpoint.Options)
 		endpointJson, err := endpoint.MarshalJSON()
 		if err != nil {
 			return nil, err
@@ -63,6 +65,8 @@ func (o *EndpointService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 
 func (s *EndpointService) Save(tx *gorm.DB, act string, data json.RawMessage) error {
 	var err error
+
+	data = SanitizeRawConfig(data)
 
 	switch act {
 	case "new", "edit":

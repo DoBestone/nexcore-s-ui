@@ -49,6 +49,8 @@ func (o *OutboundService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	for _, outbound := range outbounds {
+		// 加载兜底 — 见 service/inbounds.go GetAllConfig 同款注释
+		outbound.Options = SanitizeRawConfig(outbound.Options)
 		outboundJson, err := outbound.MarshalJSON()
 		if err != nil {
 			return nil, err
@@ -60,6 +62,8 @@ func (o *OutboundService) GetAllConfig(db *gorm.DB) ([]json.RawMessage, error) {
 
 func (s *OutboundService) Save(tx *gorm.DB, act string, data json.RawMessage) error {
 	var err error
+
+	data = SanitizeRawConfig(data)
 
 	switch act {
 	case "new", "edit":

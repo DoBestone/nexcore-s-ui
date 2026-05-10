@@ -105,6 +105,9 @@ func (s *ConfigService) GetConfig(data string) (*[]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 下发给 sing-box 前剥离前端 metadata(_nb_binding 等)。setting.config 里
+	// 保留(前端业务依赖)— 仅在生成 sing-box 入参的瞬间清洗。
+	rawConfig = StripDownstreamFields(rawConfig)
 	return &rawConfig, nil
 }
 
@@ -256,6 +259,9 @@ func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initU
 			go func() { _ = s.RestartCore() }()
 		}
 	case "config":
+		// 整段 config JSON 也跑 sanitize:用户从 xray/v2ray 等粘贴整份配置时
+		// 常见 server_port=string、acme.key_type 等不兼容字段。
+		data = SanitizeRawConfig(data)
 		err = s.SettingService.SaveConfig(tx, data)
 		if err != nil {
 			return nil, err

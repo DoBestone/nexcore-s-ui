@@ -57,6 +57,8 @@ func (s *TlsService) GetAll() ([]model.Tls, error) {
 func (s *TlsService) Save(tx *gorm.DB, action string, data json.RawMessage, hostname string) error {
 	var err error
 
+	data = SanitizeRawConfig(data)
+
 	switch action {
 	case "new", "edit":
 		var tls model.Tls
@@ -64,10 +66,10 @@ func (s *TlsService) Save(tx *gorm.DB, action string, data json.RawMessage, host
 		if err != nil {
 			return err
 		}
-		// sing-box 1.13.5+ 删除了 acme.key_type — 写库前 strip 掉,
-		// 否则 reload sing-box 会报 unknown field "key_type"。
-		// 老配置(v1.7.4 时代签发的)/ 用户粘贴的 schema 都可能带这个字段。
-		tls.Server = stripACMEKeyType(tls.Server)
+		// 防御性兜底:有些客户端可能把 server 嵌套 RawMessage 单独提交,这里
+		// 再跑一次 sanitize 保证 ACME / port 等字段一致(stripACMEKeyType 仍保留
+		// 给 InboundService.GetAllConfig 老 DB 加载路径用,见 service/inbounds.go)。
+		tls.Server = SanitizeRawConfig(tls.Server)
 		err = tx.Save(&tls).Error
 		if err != nil {
 			return err
