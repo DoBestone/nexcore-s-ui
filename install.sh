@@ -375,7 +375,8 @@ install_panel() {
     if [[ -n "${svc_src}" ]]; then
         install -m 0644 "${svc_src}" "${SERVICE_FILE}"
     elif [[ ! -f "${SERVICE_FILE}" ]]; then
-        # tarball 没有 service 文件且本机也没有 — 现造一个最小可用版
+        # tarball 没有 service 文件且本机也没有 — 现造一个含加固选项的版本
+        # (AUDIT.md H6,详细说明见仓库 nexcore-s-ui.service)
         cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=${CMD_NAME} Service
@@ -388,6 +389,13 @@ WorkingDirectory=${INSTALL_DIR}/
 ExecStart=${INSTALL_DIR}/sui
 Restart=on-failure
 RestartSec=10s
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

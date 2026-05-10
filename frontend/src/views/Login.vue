@@ -114,10 +114,11 @@ const onLogin = async () => {
       const resp = await HttpUtil.post('api/login', { user: form.username, pass: form.password })
       if (resp.success) {
         localStorage.setItem('admin_username', form.username)
-        setTimeout(() => router.push('/'), 350)
+        // 登录成功立即跳;loading 状态随组件销毁无副作用,不再用 setTimeout 凑动画
+        await router.push('/')
       }
     } finally {
-      setTimeout(() => { loading.value = false }, 350)
+      loading.value = false
     }
   })
 }
