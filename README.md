@@ -12,6 +12,16 @@
 
 ---
 
+## 系统要求
+
+- **推荐**:**Ubuntu 24.04 LTS**(本仓库主测目标,从 install → upgrade → 全协议入站 / 出站 / 中转都跑过端到端验证)
+- **兼容**:Ubuntu 20.04+ / Debian 11+ / CentOS Stream 8+ / OpenCloudOS / 任意带 systemd 的现代 Linux
+- **架构**:`amd64` / `arm64` / `386` / `armv5` / `armv6` / `armv7` / `s390x`
+- **二进制**:GitHub Actions CI 用 **musl 静态编译**(Bootlin toolchain),**不依赖 host glibc 版本**;Ubuntu 20.04 这种老发行版也能直接跑 release 包
+- **运行身份**:root(需要 bind 80/443 低端口 + 写 ACME cert + 创建 tun 设备)
+
+---
+
 ## 一键安装
 
 ```bash
