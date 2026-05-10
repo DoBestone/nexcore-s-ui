@@ -84,11 +84,13 @@ func OpenDB(dbPath string) error {
 	if strings.Contains(dbPath, "?") {
 		sep = "&"
 	}
-	// AUDIT.md H1:启用 SQLite foreign_key 强制(默认是 off,DDL 里写的
-	// `FOREIGN KEY ... REFERENCES tls(id)` 一直没真的生效)。
-	// 现在删 TLS 时若有 inbound 引用,DB 层兜一层错,不再依赖 service 层
-	// 显式 "tls in use" 检查的鲁棒性。
-	dsn := dbPath + sep + "_busy_timeout=10000&_journal_mode=WAL&_foreign_keys=on"
+	// AUDIT.md H1 已回退(v1.7.15):启了 _foreign_keys=on 后,现有 schema 把
+	// inbound.tls_id=0 当 nullable("不绑 TLS")的约定会撞 SQLite FK 校验,
+	// SS / 任何不带 TLS 的入站 Save 全部报 FOREIGN KEY constraint failed。
+	// 要真启 fk 须先把 inbound.tls_id 改 *uint nullable + 数据迁移把现存
+	// 0 改 NULL,改动量大、风险高,这次不做。Service 层已有"tls in use"
+	// 软校验,可控。
+	dsn := dbPath + sep + "_busy_timeout=10000&_journal_mode=WAL"
 	db, err = gorm.Open(sqlite.Open(dsn), c)
 	if err != nil {
 		return err
