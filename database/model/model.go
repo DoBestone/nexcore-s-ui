@@ -3,8 +3,11 @@ package model
 import "encoding/json"
 
 type Setting struct {
-	Id    uint   `json:"id" form:"id" gorm:"primaryKey;autoIncrement"`
-	Key   string `json:"key" form:"key"`
+	Id uint `json:"id" form:"id" gorm:"primaryKey;autoIncrement"`
+	// AUDIT.md H5:Key 加 UNIQUE 索引 — 老 schema 没有索引,saveSetting 是
+	// read-then-write 竞态(并发 Save 同 key 可能写入两条同 key 的行)。
+	// AutoMigrate 会自动建 UNIQUE INDEX,顺便加速 GetAllSetting 的 WHERE key=?。
+	Key   string `json:"key" form:"key" gorm:"uniqueIndex"`
 	Value string `json:"value" form:"value"`
 }
 
@@ -46,10 +49,14 @@ type Client struct {
 }
 
 type Stats struct {
-	Id        uint64 `json:"id" gorm:"primaryKey;autoIncrement"`
-	DateTime  int64  `json:"dateTime"`
-	Resource  string `json:"resource"`
-	Tag       string `json:"tag"`
+	Id uint64 `json:"id" gorm:"primaryKey;autoIncrement"`
+	// AUDIT.md MED:加复合索引 (resource, tag, date_time) — 流量聚合查询
+	// 几乎全部都是 WHERE resource=? AND tag=? AND date_time BETWEEN ?,
+	// 老 schema 全表扫,数据量起来后冷启动几秒。索引名固定,GORM 用同名
+	// 三列做组合 idx,顺序按选择度(resource 最少 / date_time 最多)。
+	DateTime  int64  `json:"dateTime" gorm:"index:idx_stats_lookup,priority:3"`
+	Resource  string `json:"resource" gorm:"index:idx_stats_lookup,priority:1"`
+	Tag       string `json:"tag" gorm:"index:idx_stats_lookup,priority:2"`
 	Direction bool   `json:"direction"`
 	Traffic   int64  `json:"traffic"`
 }

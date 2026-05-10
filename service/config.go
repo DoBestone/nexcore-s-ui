@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alireza0/s-ui/core"
@@ -14,12 +14,14 @@ import (
 	"github.com/alireza0/s-ui/util/common"
 )
 
+// AUDIT.md H3:lastStartFailTime / startCoreInProgress 之前是裸变量 + 部分位置漏锁,
+// race detector 跑就报 data race。改成 atomic 一族,CompareAndSwap 替代手写互斥,
+// 语义不变但消除并发竞争(panel API 多并发触发 RestartCore 时直接体现)。
 var (
 	LastUpdate          int64
 	corePtr             *core.Core
-	startCoreMu         sync.Mutex
-	startCoreInProgress bool
-	lastStartFailTime   time.Time
+	startCoreInProgress atomic.Bool  // 串行化 Start / restartCoreWithConfig
+	lastStartFailNano   atomic.Int64 // time.UnixNano(),0 = 从未失败过
 	startCooldown       = 15 * time.Second
 )
 
@@ -115,36 +117,24 @@ func (s *ConfigService) StartCore() error {
 	if corePtr.IsRunning() {
 		return nil
 	}
-	startCoreMu.Lock()
-	if startCoreInProgress {
-		startCoreMu.Unlock()
+	// CAS 序列化:两个并发 StartCore 只允许一个真正进 — 另一个直接返回。
+	if !startCoreInProgress.CompareAndSwap(false, true) {
 		return nil
 	}
-	if time.Since(lastStartFailTime) < startCooldown {
-		// startCooldown / time.Second 仍是 time.Duration 类型,String() 输出
-		// 它的纳秒数(如 "15ns")。强转 int64 才得到字面量秒数。
+	defer startCoreInProgress.Store(false)
+
+	if last := lastStartFailNano.Load(); last > 0 && time.Since(time.Unix(0, last)) < startCooldown {
 		logger.Info("start core cooldown ", int64(startCooldown/time.Second), " seconds")
-		startCoreMu.Unlock()
 		return nil
 	}
-	startCoreInProgress = true
-	startCoreMu.Unlock()
-	defer func() {
-		startCoreMu.Lock()
-		startCoreInProgress = false
-		startCoreMu.Unlock()
-	}()
 
 	logger.Info("starting core")
 	rawConfig, err := s.GetConfig("")
 	if err != nil {
 		return err
 	}
-	err = corePtr.Start(*rawConfig)
-	if err != nil {
-		startCoreMu.Lock()
-		lastStartFailTime = time.Now()
-		startCoreMu.Unlock()
+	if err := corePtr.Start(*rawConfig); err != nil {
+		lastStartFailNano.Store(time.Now().UnixNano())
 		logger.Error("start sing-box err:", err.Error())
 		return err
 	}
@@ -161,18 +151,10 @@ func (s *ConfigService) RestartCore() error {
 }
 
 func (s *ConfigService) restartCoreWithConfig(config json.RawMessage) error {
-	startCoreMu.Lock()
-	if startCoreInProgress {
-		startCoreMu.Unlock()
+	if !startCoreInProgress.CompareAndSwap(false, true) {
 		return nil
 	}
-	startCoreInProgress = true
-	startCoreMu.Unlock()
-	defer func() {
-		startCoreMu.Lock()
-		startCoreInProgress = false
-		startCoreMu.Unlock()
-	}()
+	defer startCoreInProgress.Store(false)
 
 	if corePtr.IsRunning() {
 		if err := corePtr.Stop(); err != nil {
@@ -186,6 +168,7 @@ func (s *ConfigService) restartCoreWithConfig(config json.RawMessage) error {
 		return err
 	}
 	if err := corePtr.Start(*rawConfig); err != nil {
+		lastStartFailNano.Store(time.Now().UnixNano())
 		logger.Error("restart sing-box err (start):", err.Error())
 		return err
 	}

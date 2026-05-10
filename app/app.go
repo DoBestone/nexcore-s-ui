@@ -37,6 +37,11 @@ func (a *APP) Init() error {
 		return err
 	}
 
+	// AUDIT.md C1:DB 起来后立即把 users.password 字段从明文升级到 bcrypt。
+	// 启动时跑一次成本很低(只对未升级的行做 GenerateFromPassword);后续启动
+	// 检测到全部 hash 直接空跑返回。
+	service.UpgradePlaintextPasswords()
+
 	// Init Setting
 	a.SettingService.GetAllSetting()
 

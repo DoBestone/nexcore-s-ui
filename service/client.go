@@ -50,7 +50,9 @@ func buildLinkRemarkCtx(tx *gorm.DB) *linkRemarkCtx {
 
 	// outbounds.tag → display_name
 	var outbounds []model.Outbound
-	if err := tx.Model(model.Outbound{}).Find(&outbounds).Error; err == nil {
+	if err := tx.Model(model.Outbound{}).Find(&outbounds).Error; err != nil {
+		logger.Warning("buildLinkRemarkCtx: load outbounds:", err)
+	} else {
 		for _, ob := range outbounds {
 			ctx.OutboundDisplay[ob.Tag] = strings.TrimSpace(ob.DisplayName)
 		}
@@ -59,13 +61,17 @@ func buildLinkRemarkCtx(tx *gorm.DB) *linkRemarkCtx {
 	// route.rules._nb_binding → inbound 数组 ↔ outbound 字段
 	// 数据来自 setting.config(setting 表 key='config')。
 	cfgStr, err := (&SettingService{}).GetConfig()
-	if err == nil && cfgStr != "" {
+	if err != nil {
+		logger.Warning("buildLinkRemarkCtx: load config:", err)
+	} else if cfgStr != "" {
 		var cfg struct {
 			Route struct {
 				Rules []map[string]interface{} `json:"rules"`
 			} `json:"route"`
 		}
-		if json.Unmarshal([]byte(cfgStr), &cfg) == nil {
+		if uErr := json.Unmarshal([]byte(cfgStr), &cfg); uErr != nil {
+			logger.Warning("buildLinkRemarkCtx: parse setting.config:", uErr)
+		} else {
 			for _, r := range cfg.Route.Rules {
 				binding, _ := r["_nb_binding"].(bool)
 				if !binding {
@@ -340,7 +346,11 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 	for _, client := range clients {
 		// Add inbounds
 		var clientInbounds []uint
-		json.Unmarshal(client.Inbounds, &clientInbounds)
+		// AUDIT.md H2:坏 JSON 让 clientInbounds 空 → 后续 append 后只剩新 inboundId,
+		// 旧关联丢失。这里降级到 warn,继续往后跑(让坏行至少能修复成单关联)。
+		if err := json.Unmarshal(client.Inbounds, &clientInbounds); err != nil {
+			logger.Warning("UpdateClientsOnInboundAdd: parse client.Inbounds for id=", client.Id, ": ", err)
+		}
 		clientInbounds = append(clientInbounds, inboundId)
 		client.Inbounds, err = json.MarshalIndent(clientInbounds, "", "  ")
 		if err != nil {
@@ -348,7 +358,9 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 		}
 		// Add links
 		var clientLinks, newClientLinks []map[string]string
-		json.Unmarshal(client.Links, &clientLinks)
+		if err := json.Unmarshal(client.Links, &clientLinks); err != nil {
+			logger.Warning("UpdateClientsOnInboundAdd: parse client.Links for id=", client.Id, ": ", err)
+		}
 		newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
 		for _, newLink := range newLinks {
 			newClientLinks = append(newClientLinks, map[string]string{
@@ -396,7 +408,13 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 	var orphanNames []string
 	for _, client := range clients {
 		var clientInbounds, newClientInbounds []uint
-		json.Unmarshal(client.Inbounds, &clientInbounds)
+		// AUDIT.md H2:解析 err 必须显式处理 — 坏 JSON 让 clientInbounds 空,
+		// 下面 orphan 检测会**误删健康客户**(因为 newClientInbounds 也是空)。
+		// 坏数据走告警 + skip 该 client(保守不动),不让坏行触发联动删除。
+		if err := json.Unmarshal(client.Inbounds, &clientInbounds); err != nil {
+			logger.Warning("UpdateClientsOnInboundDelete: parse client.Inbounds for id=", client.Id, " name=", client.Name, ": ", err, " — skip,保留 client 不动")
+			continue
+		}
 		for _, clientInbound := range clientInbounds {
 			if clientInbound != id {
 				newClientInbounds = append(newClientInbounds, clientInbound)
@@ -413,9 +431,12 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 		if err != nil {
 			return err
 		}
-		// Delete links
+		// Delete links — links 解析失败仅丢失 link 重整,不致命,警告 + 视为空
 		var clientLinks, newClientLinks []map[string]string
-		json.Unmarshal(client.Links, &clientLinks)
+		if err := json.Unmarshal(client.Links, &clientLinks); err != nil {
+			logger.Warning("UpdateClientsOnInboundDelete: parse client.Links for id=", client.Id, ": ", err)
+			clientLinks = nil
+		}
 		for _, clientLink := range clientLinks {
 			if clientLink["remark"] != tag {
 				newClientLinks = append(newClientLinks, clientLink)
@@ -464,7 +485,9 @@ func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]mode
 		}
 		for _, client := range clients {
 			var clientLinks, newClientLinks []map[string]string
-			json.Unmarshal(client.Links, &clientLinks)
+			if err := json.Unmarshal(client.Links, &clientLinks); err != nil {
+				logger.Warning("UpdateLinksByInboundChange: parse client.Links for id=", client.Id, ": ", err)
+			}
 			newLinks := util.LinkGenerator(client.Config, &inbound, hostname, addrSource, client.Name, remarkCtx.remarkPrefixFor(inbound.Tag))
 			for _, newLink := range newLinks {
 				newClientLinks = append(newClientLinks, map[string]string{
@@ -565,7 +588,7 @@ func (s *ClientService) ResetClients(tx *gorm.DB, dt int64) ([]uint, error) {
 	var inboundIds []uint
 	// Set delay start without periodic reset
 	err = tx.Model(model.Client{}).
-		Where("enable = true AND delay_start = true AND auto_reset = false AND (Up + Down) > 0").Find(&resetClients).Error
+		Where("enable = true AND delay_start = true AND auto_reset = false AND reset_days > 0 AND (Up + Down) > 0").Find(&resetClients).Error
 	if err != nil {
 		return nil, err
 	}
@@ -584,7 +607,7 @@ func (s *ClientService) ResetClients(tx *gorm.DB, dt int64) ([]uint, error) {
 
 	// Set delay start with periodic reset
 	err = tx.Model(model.Client{}).
-		Where("enable = true AND delay_start = true AND auto_reset = true AND (Up + Down) > 0").Find(&resetClients).Error
+		Where("enable = true AND delay_start = true AND auto_reset = true AND reset_days > 0 AND (Up + Down) > 0").Find(&resetClients).Error
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +626,9 @@ func (s *ClientService) ResetClients(tx *gorm.DB, dt int64) ([]uint, error) {
 
 	// Set periodic reset
 	err = tx.Model(model.Client{}).
-		Where("delay_start = false AND auto_reset = true AND next_reset < ?", dt).Find(&resetClients).Error
+		// AUDIT.md MED:reset_days <= 0 + auto_reset 会让 NextReset 算成 dt(当前),
+		// 下一轮 cron 立刻命中,陷入即时重置循环。WHERE 加 reset_days > 0 兜底过滤。
+		Where("delay_start = false AND auto_reset = true AND reset_days > 0 AND next_reset < ?", dt).Find(&resetClients).Error
 	if err != nil {
 		return nil, err
 	}

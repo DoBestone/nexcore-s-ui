@@ -93,12 +93,19 @@ func Reload() error {
 }
 
 // resolveToken constant-time 比对内存中所有 token,命中即返回身份。
-// constant-time 不是为了"防 token 字典攻击" — 在这种 32-char 随机串里没
-// 意义 — 而是 cargo cult 自 x-ui 的做法,保持代码风格一致。
+//
+// 双模式比较:DB 里 token 列存的可能是 sha256 hash(新 token,AUDIT.md C1
+// 后)或 legacy 明文(老 token,未重置过的存量)。中间件按列内容判别:
+//   - 64 字符 hex → 跟 sha256(raw) 比
+//   - 其它 → 直接跟 raw 比(legacy 明文,AddToken/ResetToken 后会逐渐归零)
+//
+// constant-time 比对保留:防止 token 长度 / 命中时序泄漏(对存量明文 token
+// 尤其重要,因为它们没经过 hash 单向化)。
 func resolveToken(raw string) (memoItem, bool) {
 	if raw == "" {
 		return memoItem{}, false
 	}
+	rawSha := service.HashTokenForCompare(raw)
 	memo.mu.RLock()
 	defer memo.mu.RUnlock()
 	now := time.Now().Unix()
@@ -106,11 +113,33 @@ func resolveToken(raw string) (memoItem, bool) {
 		if it.Expiry > 0 && it.Expiry < now {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(it.Token), []byte(raw)) == 1 {
+		// 64 字符全 hex 视为 sha256 hash;长度不是 64 / 含非 hex 视为 legacy 明文
+		var compare string
+		if isSha256Hex(it.Token) {
+			compare = rawSha
+		} else {
+			compare = raw
+		}
+		if subtle.ConstantTimeCompare([]byte(it.Token), []byte(compare)) == 1 {
 			return it, true
 		}
 	}
 	return memoItem{}, false
+}
+
+// isSha256Hex 64-char 全小写 hex 才认为是 sha256 输出。跟 service.looksLikeTokenHash
+// 重复一份是为了避免 v1 中间件对 service 包做"读私有判断"的脏路径(中间件
+// 已经 import service),但保持本地一份判别让模式比较的边界对中间件可见。
+func isSha256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // AuthMiddleware 失败:401 + missing_api_token / invalid_api_token,与 x-ui

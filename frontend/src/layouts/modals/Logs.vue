@@ -25,7 +25,11 @@
     </div>
 
     <div class="logs-output mono" dir="ltr">
-      <div v-for="(line, i) in lines" :key="i" v-html="line"></div>
+      <!-- AUDIT.md H7:旧版 v-html 直接渲染后端日志行,sing-box / panel 自身打印
+           的内容若被注入 <script>...</script> 即 XSS。改 {{ }} 文本渲染,顺手在 CSS
+           white-space: pre-wrap 保留缩进 / 换行的可读性。如果将来要回 ANSI 颜色,
+           前端用 strip-ansi + 具名 class 解析,而不是放回 v-html。 -->
+      <div v-for="(line, i) in lines" :key="i" class="logs-line">{{ line }}</div>
       <div v-if="lines.length === 0 && !loading" class="logs-empty">{{ $t('noData') }}</div>
     </div>
   </el-dialog>

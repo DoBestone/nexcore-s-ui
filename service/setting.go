@@ -16,6 +16,7 @@ import (
 	"github.com/alireza0/s-ui/util/common"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var defaultConfig = `{
@@ -165,20 +166,22 @@ func (s *SettingService) getString(key string) (string, error) {
 	return setting.Value, nil
 }
 
+// saveSetting 用 SQLite 原生 UPSERT(ON CONFLICT(key) DO UPDATE),原子写入。
+//
+// AUDIT.md H5:旧实现是 select-then-write,两个并发 Save 同 key 时:
+//
+//	G1 select(no row)→ G2 select(no row)→ G1 insert → G2 insert
+//	→ Setting.Key 现在有 UNIQUE 索引,G2 会被 DB 拦下;但若没索引就会插重。
+//
+// 改 UPSERT 后无论是否首次都是一条 SQL,GORM 用 clause.OnConflict 翻成
+// `INSERT ... ON CONFLICT(key) DO UPDATE SET value=excluded.value`。
+// 跟 model.Setting.Key 上的 uniqueIndex 配合,行级原子。
 func (s *SettingService) saveSetting(key string, value string) error {
-	setting, err := s.getSetting(key)
 	db := database.GetDB()
-	if database.IsNotFound(err) {
-		return db.Create(&model.Setting{
-			Key:   key,
-			Value: value,
-		}).Error
-	} else if err != nil {
-		return err
-	}
-	setting.Key = key
-	setting.Value = value
-	return db.Save(setting).Error
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&model.Setting{Key: key, Value: value}).Error
 }
 
 func (s *SettingService) setString(key string, value string) error {
