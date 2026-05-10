@@ -237,6 +237,21 @@
 
           <!-- TUN(网卡级代理) -->
           <template v-if="inbound.type === 'tun'">
+            <el-form-item label="接口地址">
+              <el-select
+                v-model="inbound.address"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                :reserve-keyword="false"
+                placeholder="如 172.19.0.1/30 fdfe:dcba:9876::1/126(回车确认每条)"
+                class="mono"
+              />
+              <div style="font-size:12px;color:var(--el-text-color-secondary);margin-top:4px;">
+                必填:tun 网卡的 IPv4 / IPv6 CIDR;sing-box 启动会校验,缺这个直接拒绝
+              </div>
+            </el-form-item>
             <el-form-item label="网卡名称">
               <el-input v-model="inbound.interface_name" placeholder="自动 = 留空" class="mono" />
             </el-form-item>

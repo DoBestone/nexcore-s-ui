@@ -229,7 +229,17 @@ const defaultValues: Record<InType, Inbound> = {
     "6=500-1000",
     "7=500-1000"
   ]},
-  tun: <Tun>{ type: InTypes.Tun, mtu: 9000, stack: 'system', udp_timeout: '5m', auto_route: false },
+  // tun 必须有 address(sing-box 1.13 启动时校验):缺省 172.19.0.1/30 + fdfe:.../126,
+  // 跟 sing-box 文档默认推荐对齐。auto_route=true 因为 tun 没自动路由就只是个空网卡,
+  // 但前端表单允许关闭。
+  tun: <Tun>{
+    type: InTypes.Tun,
+    address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+    mtu: 9000,
+    stack: 'system',
+    udp_timeout: '5m',
+    auto_route: true,
+  },
   redirect: <Redirect>{ type: InTypes.Redirect },
   tproxy: <TProxy>{ type: InTypes.TProxy },
 }

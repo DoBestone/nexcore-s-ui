@@ -257,31 +257,28 @@ func (a *Controller) listInbounds(c *gin.Context) {
 		return
 	}
 	rows := derefMaps(items)
-	full := c.Query("full") == "1"
-	if full {
-		// full 模式也注入 x-ui 兼容字段(protocol/port),保留所有原 sing-box 字段
-		// 主控前端 reload 时不再需要 normalize
+	// 默认 full — 主控 / 前端编辑表单都要完整字段。?slim=1 给老消费者保留精简视图。
+	if c.Query("slim") == "1" {
+		out := make([]gin.H, 0, len(rows))
 		for _, m := range rows {
-			injectXuiInboundFields(m)
+			out = append(out, gin.H{
+				"id":       m["id"],
+				"tag":      m["tag"],
+				"type":     m["type"],
+				"protocol": m["type"],
+				"enable":   m["enable"],
+				"listen":   m["listen"],
+				"port":     m["listen_port"],
+				"tlsId":    m["tls_id"],
+			})
 		}
-		OK(c, rows)
+		OK(c, out)
 		return
 	}
-	// slim 视图:与 x-ui /inbounds 默认输出对齐 — id/tag/protocol/enable/listen/port
-	out := make([]gin.H, 0, len(rows))
 	for _, m := range rows {
-		out = append(out, gin.H{
-			"id":       m["id"],
-			"tag":      m["tag"],
-			"type":     m["type"],
-			"protocol": m["type"], // x-ui 主控读 protocol
-			"enable":   m["enable"],
-			"listen":   m["listen"],
-			"port":     m["listen_port"],
-			"tlsId":    m["tls_id"],
-		})
+		injectXuiInboundFields(m)
 	}
-	OK(c, out)
+	OK(c, rows)
 }
 
 func (a *Controller) getInbound(c *gin.Context) {

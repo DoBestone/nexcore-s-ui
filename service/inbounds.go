@@ -55,20 +55,19 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 	for _, inbound := range inbounds {
 		var shadowtls_version uint
 		ss_managed := false
-		inbData := map[string]interface{}{
-			"id":     inbound.Id,
-			"type":   inbound.Type,
-			"tag":    inbound.Tag,
-			"tls_id": inbound.TlsId,
-			"enable": inbound.Enable,
-		}
+		inbData := map[string]interface{}{}
+		// 把 sing-box options 整体展开到顶层 — 主控 + 前端编辑表单都要完整字段
+		// (transport / tls / multiplex / network / users / address 等)。
+		// 之前只摘 listen + listen_port,导致 tun 的 address / vmess 的 transport
+		// 全在 GET 里看不到,前端编辑要回查才能拿全。
 		if inbound.Options != nil {
 			var restFields map[string]json.RawMessage
 			if err := json.Unmarshal(inbound.Options, &restFields); err != nil {
 				return nil, err
 			}
-			inbData["listen"] = restFields["listen"]
-			inbData["listen_port"] = restFields["listen_port"]
+			for k, v := range restFields {
+				inbData[k] = v
+			}
 			if inbound.Type == "shadowtls" {
 				json.Unmarshal(restFields["version"], &shadowtls_version)
 			}
@@ -76,6 +75,13 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 				json.Unmarshal(restFields["managed"], &ss_managed)
 			}
 		}
+		// 顶层 DB 字段在 options 字段之后覆盖 — 它们是 model.Inbound 真值
+		// (id / tls_id / enable / type / tag),options 里若有 type/tag 也以 DB 为准
+		inbData["id"] = inbound.Id
+		inbData["type"] = inbound.Type
+		inbData["tag"] = inbound.Tag
+		inbData["tls_id"] = inbound.TlsId
+		inbData["enable"] = inbound.Enable
 		// users 一律走 clients 表多对多查,返回 client.name 字符串列表 ——
 		// 包括 Basic Auth 协议(mixed/socks/http/naive)。前端用 length 显示
 		// 客户数,统一 InboundClients modal 管理。

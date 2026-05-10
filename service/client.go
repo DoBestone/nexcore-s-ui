@@ -38,11 +38,10 @@ func (s *ClientService) getById(id string) (*[]model.Client, error) {
 func (s *ClientService) GetAll() (*[]model.Client, error) {
 	db := database.GetDB()
 	var clients []model.Client
-	// `links` 也带上 — 入站客户端列表里要能直接画 QR,不带的话就得每点一次
-	// 二维码再单独 GET /api/clients?id=...,UI 来回闪。
-	err := db.Model(model.Client{}).
-		Select("`id`, `enable`, `name`, `desc`, `group`, `inbounds`, `links`, `up`, `down`, `volume`, `expiry`").
-		Scan(&clients).Error
+	// 选全部字段(含 config) — API 消费者需要协议账号信息(vmess uuid /
+	// mixed username+password / shadowsocks key 等)才能渲染编辑表单。
+	// 之前为了流量小省了 config,但主控对接 + 前端编辑都要 config,默认全量更直接。
+	err := db.Model(model.Client{}).Scan(&clients).Error
 	if err != nil {
 		return nil, err
 	}

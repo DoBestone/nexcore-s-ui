@@ -782,10 +782,10 @@ let trafficTimer: any
 let connTimer: any
 onMounted(async () => {
   await Promise.all([loadTraffic(), loadFirewall(), loadConnStats()])
-  // 流量 10s 一次(跟 SaveStats cron 节拍对齐,反应更快)
-  trafficTimer = setInterval(() => { if (!document.hidden) loadTraffic() }, 10000)
-  // TCP/UDP 连接数 5s 一次(开销小,要实时)
-  connTimer = setInterval(() => { if (!document.hidden) loadConnStats() }, 5000)
+  // 流量 + TCP/UDP 都 1.5s 一次 — 用户要看实时网速;后端两个端点都很轻
+  // (流量是内存快照,connStats 读 /proc/net,几 ms 完成),1.5s 不会压到 panel
+  trafficTimer = setInterval(() => { if (!document.hidden) loadTraffic() }, 1500)
+  connTimer = setInterval(() => { if (!document.hidden) loadConnStats() }, 1500)
   // 进页面立刻先来一轮链路延迟探测,免得用户干等 10s 才有数据
   probeOnce()
   probeTimer = setInterval(() => { if (!document.hidden) probeOnce() }, PROBE_INTERVAL_MS)
