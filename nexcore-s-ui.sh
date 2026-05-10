@@ -62,10 +62,19 @@ before_show_menu() {
     show_menu
 }
 
+# install 兼容两种调用:
+#   交互式(菜单):install               → 装完回菜单
+#   CLI(脚本):  install 0 [tag]       → $1=0 表非交互;$2=可选 vX.Y.Z,缺省装 latest
 install() {
-    bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
+    local cli_mode="${1:-}"
+    local tag="${2:-}"
+    if [[ -n "$tag" ]]; then
+        bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh) "$tag"
+    else
+        bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
+    fi
     if [[ $? == 0 ]]; then
-        if [[ $# == 0 ]]; then
+        if [[ -z "$cli_mode" ]]; then
             start
         else
             start 0
@@ -73,19 +82,24 @@ install() {
     fi
 }
 
+# update 走专用的 update.sh — 不重装系统依赖、保留 db。
+# 跟 x-ui 风格对齐:无 confirm,直接升级到指定 tag(缺省 latest)。
+# 用法:
+#   update           — 菜单交互升到 latest
+#   update 0 v1.7.6  — CLI 非交互,升到指定版本
 update() {
-    confirm "This function will forcefully reinstall the latest version, and the data will not be lost. Do you want to continue?" "n"
-    if [[ $? != 0 ]]; then
-        LOGE "Cancelled"
-        if [[ $# == 0 ]]; then
-            before_show_menu
-        fi
-        return 0
+    local cli_mode="${1:-}"
+    local tag="${2:-}"
+    if [[ -n "$tag" ]]; then
+        bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh) "$tag"
+    else
+        bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/update.sh)
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/DoBestone/nexcore-s-ui/main/install.sh)
     if [[ $? == 0 ]]; then
-        LOGI "Update is complete, Panel has automatically restarted "
-        exit 0
+        LOGI "Update is complete, Panel has automatically restarted"
+        if [[ -n "$cli_mode" ]]; then
+            exit 0
+        fi
     fi
 }
 
@@ -783,9 +797,9 @@ show_usage() {
     echo -e "nexcore-s-ui enable       - Enable Autostart on OS Startup"
     echo -e "nexcore-s-ui disable      - Disable Autostart on OS Startup"
     echo -e "nexcore-s-ui log          - Check nexcore-s-ui Logs"
-    echo -e "nexcore-s-ui update       - Update"
-    echo -e "nexcore-s-ui install      - Install"
-    echo -e "nexcore-s-ui uninstall    - Uninstall"
+    echo -e "nexcore-s-ui install [tag]    - Install/upgrade (optional vX.Y.Z, default: latest)"
+    echo -e "nexcore-s-ui update [tag]     - Same as install (kept for compatibility)"
+    echo -e "nexcore-s-ui uninstall        - Uninstall (removes data dir + db)"
     echo -e "nexcore-s-ui help         - Control Menu Usage"
     echo -e "------------------------------------------"
 }
@@ -919,10 +933,12 @@ if [[ $# > 0 ]]; then
         check_install 0 && show_log nexcore-s-ui 0
         ;;
     "update")
-        check_install 0 && update 0
+        # update [tag] — 升级,可指定 tag(vX.Y.Z),缺省装 latest
+        check_install 0 && update 0 "${2:-}"
         ;;
     "install")
-        check_uninstall 0 && install 0
+        # install [tag] — 安装,可指定 tag(vX.Y.Z),缺省装 latest
+        check_uninstall 0 && install 0 "${2:-}"
         ;;
     "uninstall")
         check_install 0 && uninstall 0
