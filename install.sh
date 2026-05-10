@@ -514,8 +514,12 @@ setup_first_run() {
     FRESH_USER="admin_$(random_credential | tr 'A-Z' 'a-z' | head -c 6)"
     FRESH_PASS="$(random_credential)"
     step "创建初始管理员凭据(随机生成)"
-    if ! "${INSTALL_DIR}/sui" admin -username "${FRESH_USER}" -password "${FRESH_PASS}" >/dev/null 2>&1; then
-        warn "写入 admin 凭据失败 — 装完手动 ${cyan}${CMD_NAME}${plain} 进菜单重置"
+    # ⚠️ 不能 redirect stderr — 失败时必须能看到具体错(否则用户卡死,
+    # v1.7.12 后 bcrypt 计算 + DB AutoMigrate 慢机器可能撞 timeout)。
+    # stdout 拿掉是因为成功时不需要在屏幕显示中间状态(密码后面统一展示)。
+    if ! "${INSTALL_DIR}/sui" admin -username "${FRESH_USER}" -password "${FRESH_PASS}" >/dev/null; then
+        warn "写入 admin 凭据失败(具体错见上方 stderr)"
+        warn "可手动重置:${cyan}${INSTALL_DIR}/sui admin -reset${plain}(会输出新明文密码)"
         FRESH_USER=""
         FRESH_PASS=""
     fi
