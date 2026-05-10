@@ -134,6 +134,10 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.CFDetectIP(c)
 	case "statsTotals":
 		a.ApiService.GetStatsTotals(c)
+	case "liveTotals":
+		// 实时累计(内存 counter,1.5s 高频拉用),不走 DB
+		resource := c.Query("resource")
+		jsonObj(c, a.ApiService.StatsService.GetLiveTotals(resource), nil)
 	case "singbox-config":
 		a.ApiService.GetSingboxConfig(c)
 	case "checkOutbound":

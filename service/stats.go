@@ -207,6 +207,33 @@ func (s *StatsService) GetOnlines() (onlines, error) {
 	return *onlineResources, nil
 }
 
+// GetLiveTotals 返当前 sing-box StatsTracker 内存里的累计字节(cum + pending),
+// resource 取 "inbound"/"outbound"/"user"。给前端"实时网速"卡片用 — 1.5s 高频
+// 拉单调递增,自己算 diff/dt 得到精确速率。
+//
+// 跟 GetTotals 的区别:GetTotals 是 DB 累计(SaveStats cron 每 10s 落库一次),
+// 1.5s diff 通常 = 0;GetLiveTotals 是内存实时,无周期延迟。
+//
+// sing-box 没运行时返空 map(前端不会因此爆错)。
+func (s *StatsService) GetLiveTotals(resource string) map[string]map[string]int64 {
+	if corePtr == nil || !corePtr.IsRunning() {
+		return map[string]map[string]int64{}
+	}
+	box := corePtr.GetInstance()
+	if box == nil {
+		return map[string]map[string]int64{}
+	}
+	st := box.StatsTracker()
+	if st == nil {
+		return map[string]map[string]int64{}
+	}
+	all := st.SnapshotCounters()
+	if r, ok := all[resource]; ok {
+		return r
+	}
+	return map[string]map[string]int64{}
+}
+
 // GetOnlineIPs 查询单个 inbound 或 user 当前 60s 窗口内的活跃 source IP 列表。
 // 用法:resource="user" + tag=客户端 name → 该账号被哪些 IP 同时在用(跨入站
 // 自动汇总去重,因为 userIPs 按 name 索引)。给"限制 IP 数"功能取数据。

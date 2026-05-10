@@ -59,13 +59,13 @@
         <span class="ov-stat__label">{{ $t('stats.totalUsage', '总流量') }}</span>
         <span class="ov-stat__value">{{ HumanReadable.sizeFormat(totalUp + totalDown) }}</span>
       </div>
-      <el-tooltip content="近 10s 平均上行速率 — sing-box 流量统计每 10s 落库一次,无新流量时显示 0 B/s 是正常的" placement="top">
+      <el-tooltip content="近 1.5 秒平均上行速率 — 直读 sing-box 内存累计,无延迟" placement="top">
         <div class="ov-stat ov-stat--rate">
           <span class="ov-stat__label">↑ 上行</span>
           <span class="ov-stat__value ov-stat__value--small">{{ rateUp }}/s</span>
         </div>
       </el-tooltip>
-      <el-tooltip content="近 10s 平均下行速率" placement="top">
+      <el-tooltip content="近 1.5 秒平均下行速率" placement="top">
         <div class="ov-stat ov-stat--rate">
           <span class="ov-stat__label">↓ 下行</span>
           <span class="ov-stat__value ov-stat__value--small">{{ rateDown }}/s</span>
@@ -654,27 +654,43 @@ const lastSample = ref<{ up: number; down: number; ts: number } | null>(null)
 const rateUp = ref('0 B')
 const rateDown = ref('0 B')
 
-const loadTraffic = async () => {
-  const r = await HttpUtils.get('api/statsTotals', { resource: 'inbound' })
-  if (!r.success) return
-  const incoming = r.obj || {}
-  for (const k of Object.keys(traffic.value)) {
-    if (!(k in incoming)) delete traffic.value[k]
-  }
-  Object.assign(traffic.value, incoming)
+// fmtRate: sizeFormat 在 0/负数时返 "-",但速率为 0 应该显示 "0 B" 让用户
+// 看到"在测但当前没流量",不要显示 "-/s" 让人以为坏了。
+const fmtRate = (n: number) => {
+  if (!n || n < 0 || !isFinite(n)) return '0 B'
+  return HumanReadable.sizeFormat(n)
+}
 
-  // 算速率(基于本次跟上次采样的差值 / 时间间隔)
-  const nowUp = Object.values(traffic.value).reduce((s, t) => s + (t.up || 0), 0)
-  const nowDown = Object.values(traffic.value).reduce((s, t) => s + (t.down || 0), 0)
-  const nowTs = Date.now()
-  if (lastSample.value && nowTs > lastSample.value.ts) {
-    const dt = (nowTs - lastSample.value.ts) / 1000
-    const dUp = Math.max(0, nowUp - lastSample.value.up) / dt
-    const dDown = Math.max(0, nowDown - lastSample.value.down) / dt
-    rateUp.value = HumanReadable.sizeFormat(dUp)
-    rateDown.value = HumanReadable.sizeFormat(dDown)
+const loadTraffic = async () => {
+  // 用 liveTotals(直读 sing-box 内存累计 — 单调递增,1.5s diff 永远 > 0
+  // 当有流量时);列表行的"已用流量"仍走 statsTotals 拿 DB 累计。
+  const [live, dbTotals] = await Promise.all([
+    HttpUtils.get('api/liveTotals', { resource: 'inbound' }),
+    HttpUtils.get('api/statsTotals', { resource: 'inbound' }),
+  ])
+  if (dbTotals.success) {
+    const incoming = dbTotals.obj || {}
+    for (const k of Object.keys(traffic.value)) {
+      if (!(k in incoming)) delete traffic.value[k]
+    }
+    Object.assign(traffic.value, incoming)
   }
-  lastSample.value = { up: nowUp, down: nowDown, ts: nowTs }
+
+  // 算速率 — 基于 live(无周期延迟)
+  if (live.success && live.obj) {
+    const liveMap: Record<string, { up: number; down: number }> = live.obj
+    const nowUp = Object.values(liveMap).reduce((s, t) => s + (t.up || 0), 0)
+    const nowDown = Object.values(liveMap).reduce((s, t) => s + (t.down || 0), 0)
+    const nowTs = Date.now()
+    if (lastSample.value && nowTs > lastSample.value.ts) {
+      const dt = (nowTs - lastSample.value.ts) / 1000
+      const dUp = Math.max(0, nowUp - lastSample.value.up) / dt
+      const dDown = Math.max(0, nowDown - lastSample.value.down) / dt
+      rateUp.value = fmtRate(dUp)
+      rateDown.value = fmtRate(dDown)
+    }
+    lastSample.value = { up: nowUp, down: nowDown, ts: nowTs }
+  }
 }
 
 // 当前活跃连接数 — 5s 拉一次(开销小,实时性强)

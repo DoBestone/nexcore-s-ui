@@ -17,6 +17,11 @@ import (
 type Counter struct {
 	read  *atomic.Int64
 	write *atomic.Int64
+	// cumRead/cumWrite 是 read/write 的"永不归零镜像":每次 GetStats() Swap 时
+	// 把吞掉的 delta 也加进 cum,SnapshotCounters() 返 cum + 当前未 swap 的 read/write
+	// 总和。给"实时速率"端点用 — 1.5s 高频拉单调递增,前端算 diff/dt 永远为正。
+	cumRead  *atomic.Int64
+	cumWrite *atomic.Int64
 }
 
 type StatsTracker struct {
@@ -40,6 +45,43 @@ func NewStatsTracker() *StatsTracker {
 		inboundIPs: make(map[string]map[string]int64),
 		userIPs:    make(map[string]map[string]int64),
 	}
+}
+
+// SnapshotCounters 返当前所有 inbound/outbound/user 的 read+write counter Load
+// 值(不 Swap,不清零)。给"实时速率"端点用 — 前端 1.5s 拉一次,自己算 diff/dt。
+//
+// 跟 GetStats() 的区别:GetStats Swap 出来后值归零,只在 SaveStats cron(~10s)
+// 调用,把 delta 写 DB。SnapshotCounters 不动 counter,可以高频拉而不会跟 cron
+// 抢"周期 delta"。
+//
+// 返回:resource ("inbound"|"outbound"|"user") → tag → {up: read, down: write}
+func (c *StatsTracker) SnapshotCounters() map[string]map[string]map[string]int64 {
+	c.access.Lock()
+	defer c.access.Unlock()
+	// 总量 = 已落 cum 的部分 + 当前 pending(下次 GetStats 会 swap 走)
+	total := func(ctr Counter) (up, down int64) {
+		up = ctr.cumRead.Load() + ctr.read.Load()
+		down = ctr.cumWrite.Load() + ctr.write.Load()
+		return
+	}
+	out := map[string]map[string]map[string]int64{
+		"inbound":  {},
+		"outbound": {},
+		"user":     {},
+	}
+	for tag, ctr := range c.inbounds {
+		up, down := total(ctr)
+		out["inbound"][tag] = map[string]int64{"up": up, "down": down}
+	}
+	for tag, ctr := range c.outbounds {
+		up, down := total(ctr)
+		out["outbound"][tag] = map[string]int64{"up": up, "down": down}
+	}
+	for tag, ctr := range c.users {
+		up, down := total(ctr)
+		out["user"][tag] = map[string]int64{"up": up, "down": down}
+	}
+	return out
 }
 
 func (c *StatsTracker) Reset() {
@@ -158,7 +200,7 @@ func (c *StatsTracker) loadOrCreateCounter(obj *map[string]Counter, name string)
 	if loaded {
 		return counter
 	}
-	counter = Counter{read: &atomic.Int64{}, write: &atomic.Int64{}}
+	counter = Counter{read: &atomic.Int64{}, write: &atomic.Int64{}, cumRead: &atomic.Int64{}, cumWrite: &atomic.Int64{}}
 	(*obj)[name] = counter
 	return counter
 }
@@ -193,10 +235,23 @@ func (c *StatsTracker) GetStats() *[]model.Stats {
 
 	dt := time.Now().Unix()
 
+	// swapAndAccumulate 把 read/write Swap 出来,同时把 delta 加到 cum 镜像
+	// (供 SnapshotCounters 算永不归零的总量)
+	swapAndAccumulate := func(counter Counter) (up, down int64) {
+		down = counter.write.Swap(0)
+		up = counter.read.Swap(0)
+		if down > 0 {
+			counter.cumWrite.Add(down)
+		}
+		if up > 0 {
+			counter.cumRead.Add(up)
+		}
+		return
+	}
+
 	s := []model.Stats{}
 	for inbound, counter := range c.inbounds {
-		down := counter.write.Swap(0)
-		up := counter.read.Swap(0)
+		up, down := swapAndAccumulate(counter)
 		if down > 0 || up > 0 {
 			s = append(s, model.Stats{
 				DateTime:  dt,
@@ -215,8 +270,7 @@ func (c *StatsTracker) GetStats() *[]model.Stats {
 	}
 
 	for outbound, counter := range c.outbounds {
-		down := counter.write.Swap(0)
-		up := counter.read.Swap(0)
+		up, down := swapAndAccumulate(counter)
 		if down > 0 || up > 0 {
 			s = append(s, model.Stats{
 				DateTime:  dt,
@@ -235,8 +289,7 @@ func (c *StatsTracker) GetStats() *[]model.Stats {
 	}
 
 	for user, counter := range c.users {
-		down := counter.write.Swap(0)
-		up := counter.read.Swap(0)
+		up, down := swapAndAccumulate(counter)
 		if down > 0 || up > 0 {
 			s = append(s, model.Stats{
 				DateTime:  dt,
