@@ -28,6 +28,7 @@ var (
 type Core struct {
 	isRunning bool
 	instance  *Box
+	lastErr   string // sing-box 最近一次 start 失败的原因 — 给 /server/status xray.errorMsg 用
 }
 
 func NewCore() *Core {
@@ -37,6 +38,12 @@ func NewCore() *Core {
 		isRunning: false,
 		instance:  nil,
 	}
+}
+
+// LastError 返回 sing-box 最近一次 Start 错误描述。Start 成功时清空。
+// 给 /server/status xray.errorMsg 字段(x-ui 兼容契约)用。
+func (c *Core) LastError() string {
+	return c.lastErr
 }
 
 func (c *Core) GetCtx() context.Context {
@@ -59,15 +66,18 @@ func (c *Core) Start(sbConfig []byte) error {
 		Options: opt,
 	})
 	if err != nil {
+		c.lastErr = err.Error()
 		return err
 	}
 
 	err = c.instance.Start()
 	if err != nil {
+		c.lastErr = err.Error()
 		_ = c.instance.Close()
 		c.instance = nil
 		return err
 	}
+	c.lastErr = ""
 
 	globalCtx = service.ContextWith(globalCtx, c)
 	inbound_manager = service.FromContext[adapter.InboundManager](globalCtx)

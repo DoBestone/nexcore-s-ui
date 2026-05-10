@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alireza0/s-ui/config"
 	"github.com/alireza0/s-ui/database"
 	"github.com/alireza0/s-ui/database/model"
 	"github.com/alireza0/s-ui/service"
@@ -86,6 +87,11 @@ func (a *Controller) register(g *gin.RouterGroup) {
 	authed.GET("/inbounds", a.listInbounds)
 	authed.GET("/inbounds/:id", a.getInbound)
 	authed.GET("/inbounds/:id/clients", a.listInboundClients)
+	authed.GET("/inbounds/:id/client-traffics", a.listInboundClientTraffics)
+	// 客户端 CRUD by inbound — x-ui 兼容(per-inbound 增/改/删客户端)
+	authed.POST("/inbounds/:id/clients", a.createClientByInbound)
+	authed.PUT("/inbounds/:id/clients/:identifier", a.updateClientByInbound)
+	authed.DELETE("/inbounds/:id/clients/:identifier", a.deleteClientByInbound)
 	authed.POST("/inbounds", a.createInbound)
 	authed.PUT("/inbounds/:id", a.updateInbound)
 	authed.PATCH("/inbounds/:id/enable", a.patchInboundEnable)
@@ -204,7 +210,9 @@ func (a *Controller) serverStatus(c *gin.Context) {
 		"netIO":   st["net"],
 		"system":  st["sys"],
 		"goroutines": runtime.NumGoroutine(),
-		// xray 字段名留出来给 x-ui 主控直接读取
+		// 面板版本顶层字段(x-ui 兼容契约)— 主控 normalize 不再需要
+		"panelVersion": config.GetVersion(),
+		// xray 字段名留出来给 x-ui 主控直接读取(已含 version/state/errorMsg)
 		"xray": st["sbd"],
 	}
 	OK(c, out)
@@ -251,6 +259,11 @@ func (a *Controller) listInbounds(c *gin.Context) {
 	rows := derefMaps(items)
 	full := c.Query("full") == "1"
 	if full {
+		// full 模式也注入 x-ui 兼容字段(protocol/port),保留所有原 sing-box 字段
+		// 主控前端 reload 时不再需要 normalize
+		for _, m := range rows {
+			injectXuiInboundFields(m)
+		}
 		OK(c, rows)
 		return
 	}
@@ -282,16 +295,29 @@ func (a *Controller) getInbound(c *gin.Context) {
 	for _, m := range rows {
 		if v, ok := m["id"]; ok {
 			if fmt.Sprint(v) == id {
+				injectXuiInboundFields(m)
 				OK(c, m)
 				return
 			}
 		}
 	}
 	if len(rows) > 0 {
+		injectXuiInboundFields(rows[0])
 		OK(c, rows[0])
 		return
 	}
 	NotFound(c, "inbound_not_found", "inbound not found: "+id)
+}
+
+// injectXuiInboundFields 给 inbound map 加 x-ui 兼容字段(冗余注入,
+// 不删原 sing-box 字段)。约定见 docs/API.md#兼容性矩阵。
+func injectXuiInboundFields(m map[string]any) {
+	if _, ok := m["protocol"]; !ok {
+		m["protocol"] = m["type"]
+	}
+	if _, ok := m["port"]; !ok {
+		m["port"] = m["listen_port"]
+	}
 }
 
 func (a *Controller) createInbound(c *gin.Context) {
@@ -314,7 +340,11 @@ func (a *Controller) listOutbounds(c *gin.Context) {
 		Internal(c, "db_error", err)
 		return
 	}
-	OK(c, derefMaps(items))
+	rows := derefMaps(items)
+	for _, m := range rows {
+		injectXuiOutboundFields(m)
+	}
+	OK(c, rows)
 }
 
 func (a *Controller) getOutbound(c *gin.Context) {
@@ -323,7 +353,40 @@ func (a *Controller) getOutbound(c *gin.Context) {
 		Internal(c, "db_error", err)
 		return
 	}
-	pickById(c, "outbound_not_found", c.Param("id"), derefMaps(items))
+	rows := derefMaps(items)
+	for _, m := range rows {
+		injectXuiOutboundFields(m)
+	}
+	pickById(c, "outbound_not_found", c.Param("id"), rows)
+}
+
+// injectXuiOutboundFields 给 outbound map 加 x-ui 兼容字段(冗余注入,
+// 不删原 sing-box 字段)。
+//   protocol = type
+//   address  = server     (x-ui 风格)
+//   port     = server_port
+//   name     = tag
+//   enable   = true       (sing-box 出站没有 enable 字段,默认 true)
+//   remark   = ""         (x-ui 表单字段,sing-box 没有)
+func injectXuiOutboundFields(m map[string]any) {
+	if _, ok := m["protocol"]; !ok {
+		m["protocol"] = m["type"]
+	}
+	if _, ok := m["address"]; !ok {
+		m["address"] = m["server"]
+	}
+	if _, ok := m["port"]; !ok {
+		m["port"] = m["server_port"]
+	}
+	if _, ok := m["name"]; !ok {
+		m["name"] = m["tag"]
+	}
+	if _, ok := m["enable"]; !ok {
+		m["enable"] = true
+	}
+	if _, ok := m["remark"]; !ok {
+		m["remark"] = ""
+	}
 }
 
 func (a *Controller) createOutbound(c *gin.Context) { a.saveResource(c, "outbounds", "new") }
@@ -958,6 +1021,42 @@ func (a *Controller) listInboundClients(c *gin.Context) {
 		return
 	}
 	OK(c, rows)
+}
+
+// listInboundClientTraffics 返回该入站下所有 client 的 x-ui 风格流量行。
+// 字段映射:
+//   email      = client.name      (s-ui 用 name 当 email 等价物)
+//   up/down    = client.up/down
+//   total      = client.volume    (0 = 不限)
+//   expiryTime = client.expiry    (epoch ms,0 = 不限期)
+//   enable     = client.enable
+func (a *Controller) listInboundClientTraffics(c *gin.Context) {
+	ib, err := a.findInboundByID(c.Param("id"))
+	if err != nil {
+		NotFound(c, "inbound_not_found", "inbound not found: "+c.Param("id"))
+		return
+	}
+	db := database.GetDB()
+	var rows []model.Client
+	if err := db.Raw(
+		"SELECT * FROM clients WHERE ? IN (SELECT json_each.value FROM json_each(clients.inbounds))",
+		ib.Id,
+	).Scan(&rows).Error; err != nil {
+		Internal(c, "db_error", err)
+		return
+	}
+	out := make([]gin.H, 0, len(rows))
+	for _, cli := range rows {
+		out = append(out, gin.H{
+			"email":      cli.Name,
+			"up":         cli.Up,
+			"down":       cli.Down,
+			"total":      cli.Volume,
+			"expiryTime": cli.Expiry,
+			"enable":     cli.Enable,
+		})
+	}
+	OK(c, out)
 }
 
 // ---------- outbounds: PATCH enable / test ----------

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/alireza0/s-ui/database/model"
 	"github.com/alireza0/s-ui/logger"
 
+	sbConstant "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/common/tls"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -142,14 +144,38 @@ func (s *ServerService) GetSingboxInfo() map[string]interface{} {
 	if isRunning {
 		uptime = corePtr.GetInstance().Uptime()
 	}
+	state := "stopped"
+	if isRunning {
+		state = "running"
+	}
 	return map[string]interface{}{
-		"running": isRunning,
+		"running":  isRunning,
+		"state":    state,            // x-ui 兼容字段(string 形态)
+		"version":  singboxVersion(), // sing-box 模块版本
+		"errorMsg": corePtr.LastError(),
 		"stats": map[string]interface{}{
 			"NumGoroutine": uint32(runtime.NumGoroutine()),
 			"Alloc":        rtm.Alloc,
 			"Uptime":       uptime,
 		},
 	}
+}
+
+// singboxVersion 优先取编译时 ldflags 注入的 constant.Version,无注入时
+// 从 build info 里抓 sing-box 模块的语义版本号(release.yml 没注入,所以
+// 实际走 build info 路径)。
+func singboxVersion() string {
+	if v := strings.TrimSpace(sbConstant.Version); v != "" && v != "unknown" {
+		return v
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/sagernet/sing-box" {
+				return strings.TrimPrefix(dep.Version, "v")
+			}
+		}
+	}
+	return "unknown"
 }
 
 func (s *ServerService) GetSystemInfo() map[string]interface{} {

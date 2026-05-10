@@ -59,6 +59,21 @@ SECURE_ENTRY_PATH="${SECURE_ENTRY_PATH:-}"
 # 等同 PANEL_PORT=3095 PANEL_PATH=/app/ 的语法糖。
 USE_FIXED_DEFAULT="${USE_FIXED_DEFAULT:-}"
 
+# 安装信息回调 — 给主控/云厂商用的"装完把凭据 POST 到 webhook"机制。
+# 安全设计:
+#   - URL 走 CLI / ENV 都行(URL 不算秘密)
+#   - REPORT_KEY 强制 ENV(走 CLI 会进 /proc/<pid>/cmdline,泄露给 ps)
+#   - HMAC-SHA256(body, REPORT_KEY) → X-NexCore-Signature 头
+#   - 默认 HTTPS,--report-allow-http 才放明文(测试用)
+#   - 单次 POST + 10s 超时,失败 warn 不 die — 凭据已经在终端 / journal 里
+# 用法:
+#   REPORT_KEY=secret bash <(curl ... install.sh) --report-url=https://x/cb
+#   REPORT_URL=https://... REPORT_KEY=secret bash <(curl ... install.sh)
+REPORT_URL_RAW="${REPORT_URL:-}"
+REPORT_KEY_RAW="${REPORT_KEY:-}"
+REPORT_ALLOW_HTTP="${REPORT_ALLOW_HTTP:-}"
+REPORT_KEY_VIA_CLI=0
+
 show_help() {
     # 用 printf -- "%b" 让 ANSI escape 真正生效;heredoc 在 cat 下是字面字符。
     printf -- "%b\n" \
@@ -78,12 +93,19 @@ ${cyan}OPTIONS:${plain}
   --force, -f          强制重装(会覆盖 ${INSTALL_DIR},保留 db/)
   --help, -h           显示本帮助
 
+${cyan}回调(主控自动装节点):${plain}
+  --report-url=URL     装完 HMAC 签名 POST 凭据到此 URL(主控接收 webhook)
+  --report-allow-http  允许明文 http://(默认必须 https,测试用)
+  REPORT_KEY=secret    HMAC 签名 KEY(必填,只能 ENV 传入,CLI 会泄露)
+
 ${cyan}ENV(等价 CLI):${plain}
   PANEL_PORT=N         同 --port=N
   PANEL_PATH=/xxx/     同 --path=/xxx/
   SECURE_ENTRY=1       同 --secure-entry
   SECURE_ENTRY_PATH=x  同 --secure-entry=x
   USE_FIXED_DEFAULT=1  同 --fixed
+  REPORT_URL=URL       同 --report-url=URL
+  REPORT_ALLOW_HTTP=1  同 --report-allow-http
   GH_OWNER GH_REPO INSTALL_DIR PKG_PREFIX CMD_NAME SERVICE_NAME
 
 ${cyan}例子:${plain}
@@ -112,6 +134,14 @@ for arg in "$@"; do
         --secure-entry)          SECURE_ENTRY=1 ;;
         --secure-entry=*)        SECURE_ENTRY=1; SECURE_ENTRY_PATH="${arg#*=}" ;;
         --fixed)                 USE_FIXED_DEFAULT=1 ;;
+        --report-url=*)          REPORT_URL_RAW="${arg#*=}" ;;
+        --report-allow-http)     REPORT_ALLOW_HTTP=1 ;;
+        --report-key=*)
+            # 标记为"通过 CLI 传入了 KEY",arg-parse 阶段 warn() 还没定义,
+            # 后面起 helpers 后再发警告。
+            REPORT_KEY_RAW="${arg#*=}"
+            REPORT_KEY_VIA_CLI=1
+            ;;
         v*|V*|[0-9]*)            TARGET_VERSION="$arg" ;;
         *) printf -- "%b\n" "${red}未知参数: $arg${plain}" >&2
            echo "用 --help 看支持的参数" >&2
@@ -550,6 +580,18 @@ install_panel "${VERSION}" "${ARCHIVE}"
 setup_first_run
 apply_initial_settings
 
+# 主控自动装节点场景需要在 panel 起来时 token 就已在 DB 里 — apiv1
+# 在 init 时一次性把 tokens 表载入内存 cache,run-time 只信缓存。
+# 所以 token 必须在 systemctl restart 之前生成。这里没 REPORT_URL 时跳过。
+INSTALLER_TOKEN=""
+if [[ -n "${REPORT_URL_RAW}" && -n "${REPORT_KEY_RAW}" ]]; then
+    step "为主控生成 admin scope API token…"
+    INSTALLER_TOKEN="$("${INSTALL_DIR}/sui" token -add -desc "installer-bootstrap" 2>/dev/null | tail -1)"
+    if [[ -z "${INSTALLER_TOKEN}" ]]; then
+        warn "API token 生成失败 — webhook 回调里 api.token 字段会是空"
+    fi
+fi
+
 step "启动服务"
 systemctl restart "${SERVICE_NAME}"
 
@@ -562,3 +604,43 @@ fi
 ok "服务已激活"
 
 show_credentials
+
+# REPORT_KEY 走 CLI 是不安全的(进 /proc/<pid>/cmdline → ps 可见),
+# arg-parse 阶段还没 warn() 可调,这里补告警。fallback 仍接受,只是提醒
+# 操作员"下次别这么干"。
+if [[ "${REPORT_KEY_VIA_CLI}" = "1" ]]; then
+    warn "--report-key= 通过命令行传入会写进 /proc/<pid>/cmdline,${red}本次任务的 KEY 已经暴露给同机其他用户${plain}"
+    warn "下次请用 ${cyan}REPORT_KEY=xxx bash <(curl ...)${plain} ENV 形式传入"
+fi
+
+# 主控自动装节点 — 把刚装好的 panel URL / 端口 / 密码 / API token 一次性
+# HMAC 签名 POST 到 webhook。失败 warn 不 die,凭据仍在终端 + journal,
+# operator 可以手补。详细安全模型见 cmd/report.go 顶部注释。
+if [[ -n "${REPORT_URL_RAW}" ]]; then
+    if [[ -z "${REPORT_KEY_RAW}" ]]; then
+        warn "提供了 ${cyan}--report-url${plain} 但没 ${cyan}REPORT_KEY${plain} — 拒绝裸 POST 明文凭据(无 HMAC 签名)"
+        warn "正确用法:${cyan}REPORT_KEY=secret bash <(curl ... install.sh) --report-url=https://...${plain}"
+    else
+        echo
+        step "推送安装信息到回调地址(HMAC-SHA256 签名)…"
+
+        _allow_http_flag=""
+        [[ -n "${REPORT_ALLOW_HTTP}" ]] && _allow_http_flag="-allow-http"
+
+        # 调 binary 子命令做实际 POST — 让 Go 算 HMAC、构造 payload 一气呵成,
+        #   比 bash + openssl 拼接稳。FRESH_PASS / token 经 ENV 传给子进程,
+        #   `KEY=val cmd` 语法只对那一条命令生效,不污染 shell 环境。
+        # token 已在 systemctl restart 前预先生成(见上方),保证主控收到时
+        #   panel 的内存 cache 里已经有这个 token,可直接用。
+        if REPORT_KEY="${REPORT_KEY_RAW}" \
+           NEXCORE_REPORT_PASSWORD="${FRESH_PASS}" \
+           NEXCORE_REPORT_API_TOKEN="${INSTALLER_TOKEN}" \
+           "${INSTALL_DIR}/sui" report -url "${REPORT_URL_RAW}" ${_allow_http_flag}; then
+            ok "回调地址已收到凭据"
+        else
+            warn "回调推送失败 — 安装本体已成功,凭据仍在终端 / journal:${cyan}journalctl -u ${SERVICE_NAME} -n 80${plain}"
+            warn "或本机查询:${cyan}${INSTALL_DIR}/sui admin -show${plain}"
+        fi
+        unset _allow_http_flag
+    fi
+fi

@@ -212,9 +212,13 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 	addrSource := (&SettingService{}).GetLinkAddrSource()
 	for index, client := range clients {
 		var clientLinks []map[string]string
-		err = json.Unmarshal(client.Links, &clientLinks)
-		if err != nil {
-			return err
+		// API 创建场景 Links 字段可能为空 — panel UI 总会传 [],外部
+		// 直接 POST 不传时 RawMessage 是 nil。空当成 []map{} 处理免得 unmarshal 失败。
+		if len(client.Links) > 0 {
+			err = json.Unmarshal(client.Links, &clientLinks)
+			if err != nil {
+				return err
+			}
 		}
 
 		newClientLinks := []map[string]string{}
