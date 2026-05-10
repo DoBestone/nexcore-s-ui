@@ -187,7 +187,7 @@
         <el-table-column label="中转" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="relayOf(row.tag)" type="warning" size="small" effect="plain" class="mono">
-              → {{ relayOf(row.tag) }}
+              → {{ relayOf(row.tag) }}<span v-if="relayDisplayName(row.tag)" class="relay-display-name"> · {{ relayDisplayName(row.tag) }}</span>
             </el-tag>
             <span v-else class="muted">本机出站</span>
           </template>
@@ -300,7 +300,7 @@
         <el-table-column label="中转" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="relayOf(row.tag)" type="warning" size="small" effect="plain" class="mono">
-              → {{ relayOf(row.tag) }}
+              → {{ relayOf(row.tag) }}<span v-if="relayDisplayName(row.tag)" class="relay-display-name"> · {{ relayDisplayName(row.tag) }}</span>
             </el-tag>
             <span v-else class="muted">本机出站</span>
           </template>
@@ -463,6 +463,16 @@ const relayOf = (tag: string): string => {
     }
   }
   return ''
+}
+
+// relayDisplayName 给入站列表的「中转」列追加出站的「中转名称」(display_name)。
+// 例如出站 tag="hk-relay" + display_name="香港落地" → 列里显示 "→ hk-relay · 香港落地",
+// 没填中转名称时只显示 tag。
+const relayDisplayName = (inboundTag: string): string => {
+  const ot = relayOf(inboundTag)
+  if (!ot) return ''
+  const ob = ((Data().outbounds as any[]) ?? []).find((o: any) => o?.tag === ot)
+  return (ob?.display_name || '').trim()
 }
 
 const filtered = (list: any[]) => {
@@ -953,6 +963,7 @@ onBeforeUnmount(() => {
 .client-pill:hover { background: var(--nc-primary); color: #fff; }
 
 .muted { color: var(--nc-text-faint); }
+.relay-display-name { color: var(--nc-text-muted); font-weight: 400; }
 
 .status-dot {
   display: inline-block;

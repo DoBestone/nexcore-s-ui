@@ -389,14 +389,25 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 	if err != nil {
 		return err
 	}
+	// orphanIds:剥离当前入站后已经没有任何关联入站的客户端 — 联动删除。
+	// 多入站共享的客户端(剩余 inbounds 非空)只是断关联,不删客户端本身。
+	// 用户语义:「删除入站时把入站下边的客户端也删除掉」。
+	var orphanIds []uint
+	var orphanNames []string
 	for _, client := range clients {
-		// Delete inbounds
 		var clientInbounds, newClientInbounds []uint
 		json.Unmarshal(client.Inbounds, &clientInbounds)
 		for _, clientInbound := range clientInbounds {
 			if clientInbound != id {
 				newClientInbounds = append(newClientInbounds, clientInbound)
 			}
+		}
+		if len(newClientInbounds) == 0 {
+			orphanIds = append(orphanIds, client.Id)
+			if client.Name != "" {
+				orphanNames = append(orphanNames, client.Name)
+			}
+			continue
 		}
 		client.Inbounds, err = json.MarshalIndent(newClientInbounds, "", "  ")
 		if err != nil {
@@ -417,6 +428,17 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 		err = tx.Save(&client).Error
 		if err != nil {
 			return err
+		}
+	}
+	if len(orphanIds) > 0 {
+		if err = tx.Where("id IN ?", orphanIds).Delete(model.Client{}).Error; err != nil {
+			return err
+		}
+		// 同 case "del":清掉 stats 表 user 累加,免重建同名 client 时混进旧流量
+		if len(orphanNames) > 0 {
+			if err = tx.Where("resource = ? AND tag IN ?", "user", orphanNames).Delete(&model.Stats{}).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

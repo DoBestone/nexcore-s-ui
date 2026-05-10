@@ -83,6 +83,13 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="中转名称" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.display_name" class="ob-display-name">{{ row.display_name }}</span>
+          <span v-else class="ob-muted">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column :label="$t('out.addr')" min-width="220" show-overflow-tooltip>
         <template #default="{ row }">
           <span v-if="row.server" class="mono">
@@ -456,6 +463,7 @@ onBeforeUnmount(stopProbe)
 .ob-tag { color: var(--nc-text-1); font-weight: 500; }
 .ob-port { color: var(--nc-text-muted); font-weight: 400; }
 .ob-muted { color: var(--nc-text-faint); }
+.ob-display-name { color: var(--nc-text-1); }
 
 .status-dot {
   display: inline-block;

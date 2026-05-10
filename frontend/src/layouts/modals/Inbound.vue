@@ -98,8 +98,13 @@
         <el-form-item label="中转目标(可选)">
           <el-select v-model="defaultOutbound" filterable placeholder="本机按全局路由出公网(不中转)" style="width: 100%">
             <el-option value="inherit" label="本机按全局路由出公网(不中转)" />
-            <el-option-group v-if="proxyOutTags.length" label="转发到落地节点">
-              <el-option v-for="t in proxyOutTags" :key="t" :value="t" :label="`→ ${t}`" />
+            <el-option-group v-if="proxyOutbounds.length" label="转发到落地节点">
+              <el-option
+                v-for="o in proxyOutbounds"
+                :key="o.tag"
+                :value="o.tag"
+                :label="o.display_name ? `→ ${o.tag} · ${o.display_name}` : `→ ${o.tag}`"
+              />
             </el-option-group>
             <el-option-group v-if="endpointOutbounds.length" label="转发到虚拟网卡端点">
               <el-option v-for="e in endpointOutbounds" :key="e.tag" :value="e.tag">
@@ -123,12 +128,22 @@
           <!-- Shadowsocks 单用户/多用户 -->
           <template v-if="inbound.type === 'shadowsocks'">
             <el-form-item label="加密方法">
-              <el-select v-model="inbound.method" filterable>
+              <el-select v-model="inbound.method" filterable @change="onSsMethodChange">
                 <el-option v-for="m in SS_METHODS" :key="m" :label="m" :value="m" />
               </el-select>
             </el-form-item>
-            <el-form-item label="密码 / Server PSK">
-              <el-input v-model="inbound.password" type="password" show-password autocomplete="new-password" />
+            <el-form-item :label="ssIs2022 ? '密钥 (Server PSK · base64)' : '密码'">
+              <el-input v-model="inbound.password" type="password" show-password autocomplete="new-password" class="mono">
+                <template #append>
+                  <el-tooltip
+                    :content="ssIs2022 ? `生成 ${ssPskBytes} 字节随机 PSK(base64)` : '生成随机密码'"
+                    placement="top"
+                  >
+                    <el-button @click="genSsPassword"><el-icon><Refresh /></el-icon></el-button>
+                  </el-tooltip>
+                </template>
+              </el-input>
+              <p v-if="ssIs2022" class="form-hint">2022 系算法的 password 是 base64 编码的 PSK,长度必须 = {{ ssPskBytes }} 字节(对应 base64 字符串 24 / 44 长度)。点 🔄 自动生成。</p>
             </el-form-item>
             <el-form-item label="网络">
               <el-select v-model="inbound.network" clearable placeholder="tcp + udp">
@@ -446,11 +461,15 @@ const PROXY_OUTBOUND_TYPES = new Set([
   'socks', 'http', 'ssh',
   'selector', 'urltest',
 ])
-const proxyOutTags = computed((): string[] =>
+// 列表 + label:label = "tag · 中转名称",中转名称空时只显示 tag。
+// 下拉 :value 仍是 tag(写入 route.rules.outbound 还是 tag);只是 label
+// 让用户能直接看到出站对应的中转标识,免得只看 tag 猜不出哪个落地。
+const proxyOutbounds = computed((): { tag: string; display_name: string }[] =>
   ((Data().outbounds as any[]) ?? [])
     .filter((o: any) => o?.tag && PROXY_OUTBOUND_TYPES.has(o.type))
-    .map((o: any) => o.tag),
+    .map((o: any) => ({ tag: o.tag, display_name: (o.display_name || '').trim() })),
 )
+const proxyOutTags = computed((): string[] => proxyOutbounds.value.map((o) => o.tag))
 const endpointOutbounds = computed((): { tag: string; type: string }[] =>
   ((Data().endpoints as any[]) ?? [])
     .filter((e: any) => e?.tag)
@@ -515,6 +534,33 @@ const SS_METHODS = [
   '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305',
   'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305', 'xchacha20-ietf-poly1305',
 ]
+
+// SS-2022 系算法的 password 必须是 base64 编码的固定长度 PSK,sing-box 校验
+// 不通过会报 "missing psk"。普通 AEAD 任意字符串都行。
+//   2022-blake3-aes-128-gcm        → 16 字节 → base64 长 24
+//   2022-blake3-aes-256-gcm        → 32 字节 → base64 长 44
+//   2022-blake3-chacha20-poly1305  → 32 字节 → base64 长 44
+const SS_2022_PSK_BYTES: Record<string, number> = {
+  '2022-blake3-aes-128-gcm': 16,
+  '2022-blake3-aes-256-gcm': 32,
+  '2022-blake3-chacha20-poly1305': 32,
+}
+const ssIs2022 = computed((): boolean => !!SS_2022_PSK_BYTES[inbound.value.method])
+const ssPskBytes = computed((): number => SS_2022_PSK_BYTES[inbound.value.method] ?? 0)
+const genSsPassword = () => {
+  if (ssIs2022.value) {
+    inbound.value.password = RandomUtil.randomShadowsocksPassword(ssPskBytes.value)
+  } else {
+    inbound.value.password = RandomUtil.randomSeq(16)
+  }
+}
+// 切算法时清掉旧 password — SS-2022 系互相之间长度也不一样;旧 password
+// 留着只会在 save 时撞 "missing psk"(不够 24/44)。点 🔄 自动生成新值即可。
+const onSsMethodChange = () => {
+  if (ssIs2022.value) {
+    inbound.value.password = RandomUtil.randomShadowsocksPassword(ssPskBytes.value)
+  }
+}
 
 // 协议分组(类型按钮组用):
 //   多用户 = 一端口 N 账号,凭证统一走 clients 表(InboundClients modal 管)

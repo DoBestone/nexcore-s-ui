@@ -447,6 +447,13 @@ func (s *InboundService) RestartInbounds(tx *gorm.DB, ids []uint) error {
 		return err
 	}
 	for _, inbound := range inbounds {
+		// 跟 Save / GetAllConfig 同款兜底:DB 历史 TLS 记录可能含 sing-box 1.13.5+
+		// 已删字段(acme.key_type 等),不 sanitize 直接 MarshalJSON 喂给 sing-box
+		// 会被 strict-unmarshal 拒("unknown field key_type"),client save 触发的
+		// RestartInbounds 路径都会失败。
+		if inbound.Tls != nil {
+			inbound.Tls.Server = SanitizeRawConfig(inbound.Tls.Server)
+		}
 		err = corePtr.RemoveInbound(inbound.Tag)
 		if err != nil && err != os.ErrInvalid {
 			return err
