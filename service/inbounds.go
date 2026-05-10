@@ -52,14 +52,16 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 		return nil, err
 	}
 
-	// 一次性预拉三类聚合数据,循环里 O(1) lookup,避免 N+1 查询:
+	// 一次性预拉聚合数据,循环里 O(1) lookup,避免 N+1 查询:
 	//   1. 流量累计  StatsService.GetTotals  → tag → {up, down}
 	//   2. 在线 IP    onlineResources.InboundIPs(SaveStats cron 每 10s 刷)
 	//   3. 中转目标  解析 setting.config.route.rules 里 _nb_binding 标记的规则
-	// 这三个之前都是前端从 /load 的 onlines/stats/config 各自再 join 一遍,数据在
-	// 网络上传两次。现在直接合并到 inbound 行,前端表格逐字段读即可。
+	//   4. 出站显示名 outbounds.display_name(给中转目标回填中转名称)
+	// 这些之前都是前端从 /load 的 onlines/stats/config/outbounds 各自再 join 一遍,
+	// 数据在网络上传多次。现在直接合并到 inbound 行,前端表格逐字段读即可。
 	totals, _ := (&StatsService{}).GetTotals("inbound")
 	inboundRelay := buildInboundRelayMap()
+	outboundDisplay := buildOutboundDisplayMap()
 
 	var data []map[string]interface{}
 	for _, inbound := range inbounds {
@@ -123,7 +125,13 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 			inbData["online_ips"] = 0
 		}
 		if relay, ok := inboundRelay[inbound.Tag]; ok && relay != "" {
-			inbData["relay_to"] = relay
+			// relay_to 输出 {tag, display_name} 对象,前端一次拿全。
+			// display_name 即出站编辑器里的"中转名称",空时只输出 tag。
+			relayObj := map[string]string{"tag": relay}
+			if dn := outboundDisplay[relay]; dn != "" {
+				relayObj["display_name"] = dn
+			}
+			inbData["relay_to"] = relayObj
 		}
 		// users 一律走 clients 表多对多查,返回 client.name 字符串列表 ——
 		// 包括 Basic Auth 协议(mixed/socks/http/naive)。前端用 length 显示
@@ -566,6 +574,22 @@ func buildInboundRelayMap() map[string]string {
 				out[tag] = ot
 			}
 		}
+	}
+	return out
+}
+
+// buildOutboundDisplayMap 拉所有出站的 tag → display_name(中转名称)。
+// 给 GetAll 给每个含中转关系的 inbound 行回填 outbound 的中转名称用。
+// 跟 client.go::buildLinkRemarkCtx 复制一份是为了 InboundService 不依赖
+// ClientService 的私有 ctx 类型。
+func buildOutboundDisplayMap() map[string]string {
+	out := map[string]string{}
+	var obs []model.Outbound
+	if err := database.GetDB().Model(model.Outbound{}).Find(&obs).Error; err != nil {
+		return out
+	}
+	for _, ob := range obs {
+		out[ob.Tag] = strings.TrimSpace(ob.DisplayName)
 	}
 	return out
 }
