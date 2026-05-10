@@ -85,18 +85,22 @@ const router = createRouter({
 const DEFAULT_TITLE = 'S-UI'
 let intervalId:any
 
-// Navigation guard to check authentication state
+// Navigation guard to check authentication state.
+//
+// 用 localStorage('admin_username') 而不是读 cookie:v1.7.12 给 session
+// cookie 加了 HttpOnly,document.cookie 拿不到 — 守卫永远判未登录,登录
+// 成功后 router.push('/') 又被守卫拦回 /login,死循环。
+//
+// localStorage 只表示"曾经登录过",不等于 session 仍有效;cookie 真过期
+// 后 API 会 401,由 plugins/httputil 全局拦截器统一清 localStorage + 跳
+// /login(单一鉴权信号源)。
 router.beforeEach((to) => {
-  // Check the session cookie
-  const sessionCookie = document.cookie.split(';').find(cookie => cookie.trim().startsWith('nexcore-s-ui='))
-  const isAuthenticated = !!sessionCookie
+  const isAuthenticated = !!localStorage.getItem('admin_username')
 
-  // If the route requires authentication and the user is not authenticated, redirect to /login
   if (to.meta.requiresAuth && !isAuthenticated) {
     return '/login'
   }
   if (to.path === '/login' && isAuthenticated) {
-    // If already authenticated and visiting /login, redirect to '/'
     return '/'
   }
 

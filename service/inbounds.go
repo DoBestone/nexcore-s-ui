@@ -51,6 +51,16 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 一次性预拉三类聚合数据,循环里 O(1) lookup,避免 N+1 查询:
+	//   1. 流量累计  StatsService.GetTotals  → tag → {up, down}
+	//   2. 在线 IP    onlineResources.InboundIPs(SaveStats cron 每 10s 刷)
+	//   3. 中转目标  解析 setting.config.route.rules 里 _nb_binding 标记的规则
+	// 这三个之前都是前端从 /load 的 onlines/stats/config 各自再 join 一遍,数据在
+	// 网络上传两次。现在直接合并到 inbound 行,前端表格逐字段读即可。
+	totals, _ := (&StatsService{}).GetTotals("inbound")
+	inboundRelay := buildInboundRelayMap()
+
 	var data []map[string]interface{}
 	for _, inbound := range inbounds {
 		var shadowtls_version uint
@@ -98,6 +108,22 @@ func (s *InboundService) GetAll() (*[]map[string]interface{}, error) {
 			if err := json.Unmarshal([]byte(inbound.Ext), &extObj); err == nil {
 				inbData["ext"] = extObj
 			}
+		}
+		// 入站列表 UI 直接读这三个字段,免去前端跨 onlines/stats/config 三处 join。
+		if t, ok := totals[inbound.Tag]; ok {
+			inbData["total_up"] = t["up"]
+			inbData["total_down"] = t["down"]
+		} else {
+			inbData["total_up"] = int64(0)
+			inbData["total_down"] = int64(0)
+		}
+		if onlineResources != nil && onlineResources.InboundIPs != nil {
+			inbData["online_ips"] = onlineResources.InboundIPs[inbound.Tag]
+		} else {
+			inbData["online_ips"] = 0
+		}
+		if relay, ok := inboundRelay[inbound.Tag]; ok && relay != "" {
+			inbData["relay_to"] = relay
 		}
 		// users 一律走 clients 表多对多查,返回 client.name 字符串列表 ——
 		// 包括 Basic Auth 协议(mixed/socks/http/naive)。前端用 length 显示
@@ -499,4 +525,47 @@ func (s *InboundService) RestartInbounds(tx *gorm.DB, ids []uint) error {
 		}
 	}
 	return nil
+}
+
+// buildInboundRelayMap 解析 setting.config.route.rules,把 _nb_binding 标记的
+// 中转关系打包成 inboundTag → outboundTag map。GetAll 用它给入站列表加
+// "中转目标" 列;前端无需再单独读一遍 setting.config 解析 rules。
+//
+// 跟 client.go::buildLinkRemarkCtx 的 InboundRelay 字段同款解析,这里独立一份
+// 是为了 InboundService 不依赖 ClientService 的内部类型。
+func buildInboundRelayMap() map[string]string {
+	out := map[string]string{}
+	cfgStr, err := (&SettingService{}).GetConfig()
+	if err != nil || cfgStr == "" {
+		return out
+	}
+	var cfg struct {
+		Route struct {
+			Rules []map[string]interface{} `json:"rules"`
+		} `json:"route"`
+	}
+	if json.Unmarshal([]byte(cfgStr), &cfg) != nil {
+		return out
+	}
+	for _, r := range cfg.Route.Rules {
+		binding, _ := r["_nb_binding"].(bool)
+		if !binding {
+			continue
+		}
+		// action=direct 视为"本机出站",不计入中转
+		if action, _ := r["action"].(string); action == "direct" {
+			continue
+		}
+		ot, _ := r["outbound"].(string)
+		if ot == "" {
+			continue
+		}
+		inb, _ := r["inbound"].([]interface{})
+		for _, it := range inb {
+			if tag, ok := it.(string); ok && tag != "" {
+				out[tag] = ot
+			}
+		}
+	}
+	return out
 }

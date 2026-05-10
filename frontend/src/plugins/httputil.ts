@@ -29,6 +29,10 @@ function _handleMsg(msg: any): void {
 
 export const logout = async () => {
   const response = await HttpUtils.get('api/logout')
+  // 清掉前端鉴权标记 — router.beforeEach 用 localStorage('admin_username') 判
+  // "曾经登录过",必须跟 cookie 失效同步清,否则跳到 /login 又被守卫认定
+  // 已登录回弹到 /,出现"按登出按钮卡住不动"。
+  localStorage.removeItem('admin_username')
   if (response.success) {
     router.push('/login')
   }
