@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alireza0/s-ui/config"
@@ -238,6 +239,41 @@ func (s *SettingService) GetLinkAddrSource() string {
 func (s *SettingService) GetPanelIp() string {
 	v, _ := s.getString("panelIp")
 	return strings.TrimSpace(v)
+}
+
+// effectivePanelIp 缓存 + 自动探测,链接生成时用。
+//
+// 优先级:管理员手填 > 出网公网 IP 探测(向多个 echo-IP 服务并发查询)。
+// 探测结果缓存 1 小时,避免每次生成链接都打公网请求。
+//
+// 设计原因:用户报"入站设了服务器 IP 模式但生成的链接还是 panel 域名" —
+// 实际是用户没在 settings 里填 panelIp,GetPanelIp 返空字符串,LinkGenerator
+// "ip" 分支 fallback 到 hostname。改成空时自动探一次,大多数情况能拿到正确公网 IP。
+var (
+	panelIpDetectedCache string
+	panelIpDetectedAt    time.Time
+	panelIpDetectMu      sync.Mutex
+)
+
+func (s *SettingService) EffectivePanelIp(cf interface{ DetectPublicIP() string }) string {
+	if v := s.GetPanelIp(); v != "" {
+		return v
+	}
+	if cf == nil {
+		return ""
+	}
+	panelIpDetectMu.Lock()
+	defer panelIpDetectMu.Unlock()
+	if panelIpDetectedCache != "" && time.Since(panelIpDetectedAt) < time.Hour {
+		return panelIpDetectedCache
+	}
+	ip := strings.TrimSpace(cf.DetectPublicIP())
+	if ip == "" {
+		return ""
+	}
+	panelIpDetectedCache = ip
+	panelIpDetectedAt = time.Now()
+	return ip
 }
 
 // GetNodeName 返回管理员在「设置」里配的节点名称(空则空字符串)。

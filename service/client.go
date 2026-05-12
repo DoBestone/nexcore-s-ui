@@ -311,7 +311,7 @@ func (s *ClientService) updateLinksWithFixedInbounds(tx *gorm.DB, clients []*mod
 	// genLink 内部按此决定 add 字段(单独 SettingService 实例,免每个 inbound
 	// 重复 SQL 查询)。
 	globalSrc := (&SettingService{}).GetLinkAddrSource()
-	panelIp := (&SettingService{}).GetPanelIp()
+	panelIp := (&SettingService{}).EffectivePanelIp(&CloudflareService{})
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for index, client := range clients {
 		var clientLinks []map[string]string
@@ -364,7 +364,7 @@ func (s *ClientService) UpdateClientsOnInboundAdd(tx *gorm.DB, initIds string, i
 		return err
 	}
 	globalSrc := (&SettingService{}).GetLinkAddrSource()
-	panelIp := (&SettingService{}).GetPanelIp()
+	panelIp := (&SettingService{}).EffectivePanelIp(&CloudflareService{})
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for _, client := range clients {
 		// Add inbounds
@@ -491,7 +491,7 @@ func (s *ClientService) UpdateClientsOnInboundDelete(tx *gorm.DB, id uint, tag s
 func (s *ClientService) UpdateLinksByInboundChange(tx *gorm.DB, inbounds *[]model.Inbound, hostname string, oldTag string) error {
 	var err error
 	globalSrc := (&SettingService{}).GetLinkAddrSource()
-	panelIp := (&SettingService{}).GetPanelIp()
+	panelIp := (&SettingService{}).EffectivePanelIp(&CloudflareService{})
 	remarkCtx := buildLinkRemarkCtx(tx)
 	for _, inbound := range *inbounds {
 		var clientIds []uint
