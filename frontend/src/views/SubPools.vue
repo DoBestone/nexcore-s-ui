@@ -9,6 +9,19 @@
         <el-button @click="loadAll" :loading="loading">
           <el-icon><Refresh /></el-icon>刷新视图
         </el-button>
+        <el-popconfirm
+          title="清空订阅源 + 节点池 + 国家池出站(pool-*)。绑了 pool-* 的入站会失去出站,需要重新挑出站。确定?"
+          confirm-button-text="确定清空"
+          cancel-button-text="取消"
+          @confirm="resetAll"
+          width="380"
+        >
+          <template #reference>
+            <el-button :disabled="subs.length === 0 && pools.length === 0">
+              <el-icon><Delete /></el-icon>一键清理
+            </el-button>
+          </template>
+        </el-popconfirm>
         <el-button type="primary" @click="openSubEdit(null)">
           <el-icon><Plus /></el-icon>新增订阅
         </el-button>
@@ -422,7 +435,21 @@ const saveSub = async () => {
 const delSub = async (id: number) => {
   const fd = new FormData(); fd.append('id', String(id))
   const res = await HttpUtils.post('api/subDelete', fd as any)
-  if (res.success) { ElMessage.success('已删除'); await loadAll() }
+  if (res.success) {
+    // 后端 Delete 已级联清节点 + 重选 + 删孤儿 pool;前端只需重拉视图
+    ElMessage.success('已删除订阅及其节点;同国家剩余其他订阅有节点的 winner 已重选,孤儿 pool 已清理')
+    await loadAll()
+  }
+}
+
+const resetAll = async () => {
+  const res = await HttpUtils.post('api/poolReset', {} as any)
+  if (res.success) {
+    ElMessage.success('订阅池已清空(subs + 节点池 + pool-* 出站)')
+    await loadAll()
+  } else {
+    ElMessage.error('清空失败:' + (res.msg || ''))
+  }
 }
 
 const toggleEnable = async (row: Sub, val: boolean) => {

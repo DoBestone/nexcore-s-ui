@@ -81,13 +81,85 @@ func (s *SubService) Update(sub *model.Sub) error {
 		}).Error
 }
 
-// Delete 删订阅 + 级联删 sub_nodes;不动 outbounds(pool-{cc} 由 ElectWinners 重选)。
+// Delete 删订阅 + 级联清理:
+//  1. 删该订阅的全部 sub_nodes
+//  2. 删订阅本身
+//  3. 重选 winners(剩余 sub 还有节点的国家,winner 切到那)
+//  4. 孤儿 pool_outbound 清理:某国家的 sub_nodes 已经一个都不剩 → 删对应 pool-{cc}
+//     (避免 inbound 绑了死 tag 一直跑不通,DB 也越攒越多失效行)
 func (s *SubService) Delete(id uint) error {
-	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+	subOpsMu.Lock()
+	defer subOpsMu.Unlock()
+	if err := database.GetDB().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("sub_id = ?", id).Delete(&model.SubNode{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&model.Sub{}, id).Error
+	}); err != nil {
+		return err
+	}
+	// 重选所有 winners(其他 sub 可能还有同国家节点)
+	if err := s.ElectWinners(); err != nil {
+		logger.Warning("Delete: ElectWinners failed: ", err)
+	}
+	// 删孤儿:pool-{cc} 但 sub_nodes 已经没该国家任何节点
+	return s.cleanupOrphanPoolOutbounds()
+}
+
+// cleanupOrphanPoolOutbounds 删掉所有"剩余 sub_nodes 已不包含该国家"的 pool_outbound 行。
+// 决策:不是"没活节点"就删(那种保留旧 winner 是用户规则),是"压根连死节点都没了"才删。
+// 触发场景:用户删了最后一个有该国家节点的订阅源 → 国家彻底从池里消失。
+func (s *SubService) cleanupOrphanPoolOutbounds() error {
+	var pools []model.PoolOutbound
+	if err := database.GetDB().Find(&pools).Error; err != nil {
+		return err
+	}
+	for _, po := range pools {
+		var cnt int64
+		database.GetDB().Model(&model.SubNode{}).
+			Where("country = ?", po.Country).Count(&cnt)
+		if cnt == 0 {
+			// 先从 sing-box 摘掉,再删 DB(摘晚了 cron 还能撞到 ghost outbound)
+			if corePtr != nil && corePtr.IsRunning() {
+				_ = corePtr.RemoveOutbound(po.Tag)
+			}
+			if err := database.GetDB().Delete(&model.PoolOutbound{}, po.Id).Error; err != nil {
+				logger.Warning("cleanupOrphan: delete ", po.Tag, " failed: ", err)
+				continue
+			}
+			logger.Info("cleanupOrphan: 删孤儿 ", po.Tag, "(该国家已无任何节点)")
+		}
+	}
+	return nil
+}
+
+// ResetAll 一键清空订阅池整套数据:
+//   - 全部 subs(订阅源)
+//   - 全部 sub_nodes(节点池)
+//   - 全部 pool_outbounds(国家池出站)
+//
+// 用户场景:订阅池数据脏了 / 想重新来一遍 / 准备转换机场源。前端有二次确认。
+// 不动用户手配的 outbounds 表,也不动 inbounds — inbound 如果之前绑了 pool-* tag,
+// 重置后那个 tag 没了,sing-box 转发会失败(转给 direct),需要用户自己重绑。
+func (s *SubService) ResetAll() error {
+	subOpsMu.Lock()
+	defer subOpsMu.Unlock()
+	// 先从 sing-box 摘掉所有 pool-* 出站(防止 Reset 后 cron 跑空 outbound 喷错误)
+	if corePtr != nil && corePtr.IsRunning() {
+		var pools []model.PoolOutbound
+		_ = database.GetDB().Find(&pools).Error
+		for _, po := range pools {
+			_ = corePtr.RemoveOutbound(po.Tag)
+		}
+	}
+	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM pool_outbounds").Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM sub_nodes").Error; err != nil {
+			return err
+		}
+		return tx.Exec("DELETE FROM subs").Error
 	})
 }
 
@@ -268,7 +340,12 @@ func (s *SubService) ElectWinners() error {
 	// display_name 处理:首次 INSERT 给默认 "订阅池·XX",已存在的行**不覆盖**(用户可能改过)。
 	// OnConflict.DoUpdates 列表故意省略 display_name + created_at,只刷被选举出的新 winner 的
 	// 协议字段(type/options)+ 来源 node 引用(winner_node_id/latency)。
-	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+	//
+	// sing-box 同步:tx 提交后再 sync(失败回滚不会留 ghost 出站),收集要同步的 tags
+	// 出 tx 后批量 Remove+Add — 让 sing-box outbound_manager 跟 DB 一致,
+	// 否则 CheckWinners cron 5min 跑一次会喷"outbound not found"。
+	var toSync []model.PoolOutbound
+	if err := database.GetDB().Transaction(func(tx *gorm.DB) error {
 		for cc, w := range winners {
 			tag := CountryPoolTagPrefix + strings.ToLower(cc)
 			po := model.PoolOutbound{
@@ -288,9 +365,55 @@ func (s *SubService) ElectWinners() error {
 			}).Create(&po).Error; err != nil {
 				return err
 			}
+			// 重读拿到 upsert 后的真实行(含被保留的 display_name)
+			var saved model.PoolOutbound
+			if err := tx.Where("tag = ?", tag).First(&saved).Error; err != nil {
+				return err
+			}
+			toSync = append(toSync, saved)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, po := range toSync {
+		s.syncPoolToCore(po)
+	}
+	return nil
+}
+
+// syncPoolToCore 把 DB 的 pool_outbound 行推到 sing-box 的 outbound_manager。
+// 用 Remove + Add 替代"原地更新"(sing-box 没暴露 Update 接口):
+//   - RemoveOutbound 幂等(不存在的 tag 也安全)
+//   - AddOutbound 用 pool_outbound.options + type + tag 重新生成完整 outbound JSON
+//
+// 调用时机:
+//   - ElectWinners 选完 winner → 同步新出站到 sing-box
+//   - CheckWinners 巡检挑次优后 → 同步切换
+//   - 删孤儿 / ResetAll → 只 Remove,不 Add
+//
+// 容错:sing-box 没运行 / Remove/Add 失败都不返错;只 logger.Warning,
+// 让用户能看到但不影响主流程。
+func (s *SubService) syncPoolToCore(po model.PoolOutbound) {
+	if corePtr == nil || !corePtr.IsRunning() {
+		return
+	}
+	var opts map[string]any
+	if err := json.Unmarshal(po.Options, &opts); err != nil {
+		logger.Warning("syncPoolToCore unmarshal options for "+po.Tag+": ", err)
+		return
+	}
+	opts["type"] = po.Type
+	opts["tag"] = po.Tag
+	raw, err := json.Marshal(opts)
+	if err != nil {
+		logger.Warning("syncPoolToCore marshal for "+po.Tag+": ", err)
+		return
+	}
+	_ = corePtr.RemoveOutbound(po.Tag) // 幂等;不存在/已下线都行
+	if err := corePtr.AddOutbound(raw); err != nil {
+		logger.Warning("syncPoolToCore AddOutbound "+po.Tag+": ", err)
+	}
 }
 
 // UpdatePoolOutboundDisplayName 用户改"订阅池出站"的中转名称。
@@ -355,6 +478,11 @@ func (s *SubService) CheckWinners(ctx context.Context) error {
 			"winner_node_id": next.Id,
 			"winner_latency": next.LatencyMs,
 		})
+		// 同步切换后的 outbound 到 sing-box
+		var updated model.PoolOutbound
+		if err := database.GetDB().First(&updated, po.Id).Error; err == nil {
+			s.syncPoolToCore(updated)
+		}
 		logger.Info(fmt.Sprintf("%s 已切换到 node#%d (%s:%d, %dms)",
 			po.Tag, next.Id, next.Server, next.ServerPort, next.LatencyMs))
 	}

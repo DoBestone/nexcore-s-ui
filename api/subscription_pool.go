@@ -80,6 +80,13 @@ func (a *ApiService) ApiElectWinners(c *gin.Context) {
 	jsonMsg(c, "electWinners", err)
 }
 
+// ApiPoolReset POST /api/poolReset — 一键清空订阅池(subs + sub_nodes + pool_outbounds)。
+// 危险操作,UI 已二次确认。
+func (a *ApiService) ApiPoolReset(c *gin.Context) {
+	err := a.SubService.ResetAll()
+	jsonMsg(c, "poolReset", err)
+}
+
 // ApiSubNodes GET /api/subNodes — 节点池;支持 ?sub_id=N&country=HK&alive=true
 func (a *ApiService) ApiSubNodes(c *gin.Context) {
 	db := database.GetDB()

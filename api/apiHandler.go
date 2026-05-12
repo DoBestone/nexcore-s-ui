@@ -93,6 +93,8 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 		a.ApiService.ApiElectWinners(c)
 	case "poolOutboundSave":
 		a.ApiService.ApiPoolOutboundSave(c)
+	case "poolReset":
+		a.ApiService.ApiPoolReset(c)
 	default:
 		jsonMsg(c, "failed", common.NewError("unknown action: ", action))
 	}
